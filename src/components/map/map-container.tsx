@@ -5,10 +5,12 @@ import { useMap } from '@/hooks/use-map';
 import { MapControls } from './map-controls';
 import type { Alert } from '@/types';
 
-const TrafficMap = dynamic(
-    () => import('./traffic-map').then(m => m.TrafficMap),
+const GoogleOperatorMap = dynamic(
+    () => import('./GoogleOperatorMap').then(m => ({ default: m.GoogleOperatorMap })),
     { ssr: false, loading: () => <MapLoadingState /> }
 );
+
+const MAPS_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
 
 function MapLoadingState() {
     return (
@@ -73,7 +75,7 @@ export function MapContainer({
 
     return (
         <div style={{ position:'relative', width:'100%', height:'100%', overflow:'hidden' }}>
-            <TrafficMap
+            <GoogleOperatorMap
                 mapState={mapState}
                 alerts={alerts}
                 onAlertClick={handleAlertClick}
@@ -81,6 +83,7 @@ export function MapContainer({
                 onCenterChange={(lat, lng) => setCenter(lat, lng)}
                 onCorridorClick={onCorridorClick}
                 selectedCorridorId={selectedCorridorId}
+                apiKey={MAPS_API_KEY}
             />
             <MapControls
                 mapState={mapState}

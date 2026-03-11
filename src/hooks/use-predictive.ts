@@ -10,6 +10,7 @@ interface UsePredictiveReturn {
     snapshot:    PredictiveSnapshot;
     setSlot:     (slot: TimelineSlot) => void;
     slotIndex:   number;
+    allSnapshots: PredictiveSnapshot[];
 }
 
 export function usePredictive(): UsePredictiveReturn {
@@ -24,5 +25,5 @@ export function usePredictive(): UsePredictiveReturn {
 
     const slotIndex = TIMELINE_SLOTS.indexOf(activeSlot);
 
-    return { activeSlot, snapshot, setSlot, slotIndex };
+    return { activeSlot, snapshot, setSlot, slotIndex, allSnapshots: MOCK_PREDICTIVE };
 }
