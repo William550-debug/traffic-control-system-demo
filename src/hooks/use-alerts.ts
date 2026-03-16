@@ -1,12 +1,12 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useWsEvent } from '@/providers/websocket-provider';
 import { MOCK_ALERTS } from '@/lib/mock-data';
 import { sortBySeverity } from '@/lib/utils';
+import { reviveAlert } from '@/lib/revive';
 import type { Alert, Severity, AlertPendingAction } from '@/types';
 
-// Track which action is pending per alert id
 type PendingMap = Record<string, AlertPendingAction>;
 
 interface AlertsState {
@@ -15,29 +15,56 @@ interface AlertsState {
     activeCount:      number;
     alertsBySeverity: Record<Severity, Alert[]>;
     pendingActions:   PendingMap;
+    isLoading:        boolean;
     acknowledgeAlert: (id: string) => void;
-    ignoreAlert:      (id: string) => void;
+    ignoreAlert:      (id: string, reason?: string) => void;
     resolveAlert:     (id: string) => void;
+    escalateAlert:    (id: string) => void;
     dispatchAlert:    (id: string) => void;
 }
 
-// Simulate async server round-trip — resolves after ~900ms
-function simulateServerAction(fn: () => void): Promise<void> {
-    return new Promise(resolve => {
-        setTimeout(() => {
-            fn();
-            resolve();
-        }, 900);
-    });
+// Real server action — falls back to optimistic update if API unavailable
+async function serverAction(
+    id: string,
+    action: string,
+    onSuccess: () => void,
+): Promise<void> {
+    try {
+        const res = await fetch('/api/alerts', {
+            method:  'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ id, action }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch {
+        await new Promise(r => setTimeout(r, 900));
+    } finally {
+        onSuccess();
+    }
 }
 
 export function useAlerts(): AlertsState {
-    const [alerts, setAlerts]   = useState<Alert[]>(MOCK_ALERTS);
-    const [pending, setPending] = useState<PendingMap>({});
+    const [alerts, setAlerts]       = useState<Alert[]>(MOCK_ALERTS);
+    const [pending, setPending]     = useState<PendingMap>({});
+    const [isLoading, setIsLoading] = useState(false);
 
-    // ── WebSocket events ────────────────────
+    // ── Fetch on mount ──────────────────────
+    useEffect(() => {
+        setIsLoading(true);
+        fetch('/api/alerts')
+            .then(r => r.json())
+            .then((data: Alert[]) => {
+                if (Array.isArray(data) && data.length > 0) {
+                    setAlerts(sortBySeverity(data.map(reviveAlert)));
+                }
+            })
+            .catch(() => { /* keep mock data */ })
+            .finally(() => setIsLoading(false));
+    }, []);
+
+    // ── WebSocket events ─────────────────────
     useWsEvent<Alert>('alert:new', useCallback((event) => {
-        const newAlert = event.payload;
+        const newAlert = reviveAlert(event.payload);
         setAlerts(prev => {
             if (prev.some(a => a.id === newAlert.id)) return prev;
             return sortBySeverity([newAlert, ...prev]);
@@ -45,7 +72,7 @@ export function useAlerts(): AlertsState {
     }, []));
 
     useWsEvent<Alert>('alert:updated', useCallback((event) => {
-        const updated = event.payload;
+        const updated = reviveAlert(event.payload);
         setAlerts(prev => prev.map(a => a.id === updated.id ? { ...a, ...updated } : a));
     }, []));
 
@@ -54,7 +81,21 @@ export function useAlerts(): AlertsState {
         setAlerts(prev => prev.map(a => a.id === id ? { ...a, status: 'resolved' } : a));
     }, []));
 
-    // ── Optimistic helpers ──────────────────
+    useWsEvent<{ id: string }>('alert:escalated', useCallback((event) => {
+        const { id } = event.payload;
+        setAlerts(prev => prev.map(a =>
+            a.id === id ? { ...a, status: 'escalated', escalatedAt: new Date(), updatedAt: new Date() } : a
+        ));
+    }, []));
+
+    useWsEvent<{ id: string }>('alert:expired', useCallback((event) => {
+        const { id } = event.payload;
+        setAlerts(prev => prev.map(a =>
+            a.id === id ? { ...a, status: 'expired', updatedAt: new Date() } : a
+        ));
+    }, []));
+
+    // ── Pending helpers ──────────────────────
     const setPendingFor = useCallback((id: string, action: AlertPendingAction) => {
         setPending(prev => ({ ...prev, [id]: action }));
     }, []);
@@ -67,11 +108,10 @@ export function useAlerts(): AlertsState {
         });
     }, []);
 
-    // ── Actions (optimistic + simulated async) ──
+    // ── Actions ──────────────────────────────
     const acknowledgeAlert = useCallback((id: string) => {
-        // Optimistic: immediately show as acknowledged in the card
         setPendingFor(id, 'approve');
-        void simulateServerAction(() => {
+        void serverAction(id, 'acknowledge', () => {
             setAlerts(prev => prev.map(a =>
                 a.id === id ? { ...a, status: 'acknowledged', updatedAt: new Date() } : a
             ));
@@ -79,11 +119,25 @@ export function useAlerts(): AlertsState {
         });
     }, [setPendingFor, clearPendingFor]);
 
-    const ignoreAlert = useCallback((id: string) => {
+    const ignoreAlert = useCallback((id: string, reason?: string) => {
         setPendingFor(id, 'ignore');
-        void simulateServerAction(() => {
+        void serverAction(id, 'ignore', () => {
             setAlerts(prev => prev.map(a =>
-                a.id === id ? { ...a, status: 'ignored', updatedAt: new Date() } : a
+                a.id === id
+                    ? { ...a, status: 'ignored', dismissReason: reason, updatedAt: new Date() }
+                    : a
+            ));
+            clearPendingFor(id);
+        });
+    }, [setPendingFor, clearPendingFor]);
+
+    const escalateAlert = useCallback((id: string) => {
+        setPendingFor(id, 'escalate');
+        void serverAction(id, 'escalate', () => {
+            setAlerts(prev => prev.map(a =>
+                a.id === id
+                    ? { ...a, status: 'escalated', escalatedAt: new Date(), updatedAt: new Date() }
+                    : a
             ));
             clearPendingFor(id);
         });
@@ -91,7 +145,7 @@ export function useAlerts(): AlertsState {
 
     const resolveAlert = useCallback((id: string) => {
         setPendingFor(id, 'approve');
-        void simulateServerAction(() => {
+        void serverAction(id, 'resolve', () => {
             setAlerts(prev => prev.map(a =>
                 a.id === id ? { ...a, status: 'resolved', updatedAt: new Date() } : a
             ));
@@ -101,7 +155,7 @@ export function useAlerts(): AlertsState {
 
     const dispatchAlert = useCallback((id: string) => {
         setPendingFor(id, 'dispatch');
-        void simulateServerAction(() => {
+        void serverAction(id, 'dispatch', () => {
             setAlerts(prev => prev.map(a =>
                 a.id === id ? { ...a, status: 'acknowledged', updatedAt: new Date() } : a
             ));
@@ -109,9 +163,11 @@ export function useAlerts(): AlertsState {
         });
     }, [setPendingFor, clearPendingFor]);
 
-    // ── Derived ────────────────────────────
+    // ── Derived ──────────────────────────────
     const activeAlerts = useMemo(
-        () => alerts.filter(a => a.status === 'active' || a.status === 'acknowledged'),
+        () => alerts.filter(a =>
+            a.status === 'active' || a.status === 'acknowledged' || a.status === 'escalated'
+        ),
         [alerts]
     );
 
@@ -129,14 +185,16 @@ export function useAlerts(): AlertsState {
     }, [activeAlerts]);
 
     return {
-        alerts: activeAlerts,
+        alerts:        activeAlerts,
         criticalCount,
-        activeCount:  activeAlerts.length,
+        activeCount:   activeAlerts.length,
         alertsBySeverity,
         pendingActions: pending,
+        isLoading,
         acknowledgeAlert,
         ignoreAlert,
         resolveAlert,
+        escalateAlert,
         dispatchAlert,
     };
 }

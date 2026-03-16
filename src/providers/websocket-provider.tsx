@@ -32,40 +32,70 @@ const WebSocketContext = createContext<WebSocketContextValue | null>(null);
 const MOCK_WS_URL = null; // set to 'ws://localhost:3001' when backend is ready
 
 function createMockEvents(): WsEvent[] {
+    const now = new Date();
     return [
         {
             type: 'alert:new',
             payload: {
-                id: `alert-${Date.now()}`,
+                id: `alert-ws-${Date.now()}`,
                 type: 'congestion',
-                severity: 'high',
-                title: 'Heavy congestion — Uhuru Highway',
-                location: { label: 'Uhuru Hwy / University Way', zone: 'CBD' },
-                confidence: 87,
+                severity: ['high', 'medium', 'critical'][Math.floor(Math.random() * 3)],
+                status: 'active',
+                title: [
+                    'Slow traffic — Ngong Road south',
+                    'Signal fault — Westlands junction',
+                    'Heavy congestion — Moi Avenue',
+                    'Incident reported — Lang\'ata Road',
+                ][Math.floor(Math.random() * 4)],
+                description: 'Auto-detected via IoT sensor network.',
+                location: { lat: -1.295 + (Math.random() - 0.5) * 0.04, lng: 36.82 + (Math.random() - 0.5) * 0.04, label: 'Nairobi CBD', zone: 'CBD' },
+                confidence: Math.floor(Math.random() * 20) + 78,
+                detectedAt: now,
+                updatedAt:  now,
+                affectedIntersections: [],
             },
-            timestamp: new Date(),
+            timestamp: now,
             sourceAgency: 'traffic',
         },
         {
             type: 'health:updated',
             payload: {
-                iotNetworkPercent: 94,
-                aiConfidence: 82,
-                uptimePercent: 99.8,
-                dataDelaySeconds: 0,
+                iotNetworkPercent: 90 + Math.random() * 8,
+                aiConfidence:      75 + Math.random() * 20,
+                uptimePercent:     99.6 + Math.random() * 0.4,
+                dataDelaySeconds:  Math.floor(Math.random() * 3),
+                activeOperators:   2 + Math.floor(Math.random() * 4),
             },
-            timestamp: new Date(),
+            timestamp: now,
+        },
+        {
+            type: 'corridor:updated',
+            payload: {
+                id: ['corridor-001','corridor-002','corridor-003','corridor-004','corridor-005'][Math.floor(Math.random() * 5)],
+                flowRate:    Math.floor(Math.random() * 2000),
+                avgSpeedKph: Math.floor(Math.random() * 60) + 5,
+            },
+            timestamp: now,
         },
         {
             type: 'recommendation:new',
             payload: {
-                id: `rec-${Date.now()}`,
-                title: 'Activate green wave on Moi Avenue',
-                confidence: 91,
-                expectedImpact: { congestionReduction: 23 },
+                id:       `rec-ws-${Date.now()}`,
+                title:    'Extend green phase — Uhuru Highway southbound',
+                confidence: 89,
+                expectedImpact: { congestionReduction: 18 },
             },
-            timestamp: new Date(),
+            timestamp: now,
         },
+        // Occasionally simulate a mode change (low probability — only 1 in 4 cycles)
+        ...(Math.random() > 0.75 ? [{
+            type: 'mode:changed' as const,
+            payload: {
+                mode:   (Math.random() > 0.5 ? 'Human-Validated' : 'AI-Prioritized') as import('@/types').OperatingMode,
+                reason: Math.random() > 0.5 ? 'Peak traffic threshold exceeded' : 'AI confidence restored above threshold',
+            },
+            timestamp: now,
+        }] : []),
     ];
 }
 

@@ -1,11 +1,9 @@
-    import React from 'react';
-    
-        const page = () => {
-          return (
-            <div>
-              <h1>This is the component </h1>
-            </div>
-          );
-        };
-    
-        export default page;
+import { redirect } from 'next/navigation';
+
+/**
+ * Root route — redirects to /login.
+ * Middleware will forward authenticated users to /operator automatically.
+ */
+export default function RootPage() {
+    redirect('/login');
+}

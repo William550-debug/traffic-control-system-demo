@@ -19,7 +19,8 @@ interface AlertDrawerProps {
     onClose:   () => void;
     onApprove: (id: string) => void;
     onIgnore:  (id: string, reason: string) => void;
-    onDispatch?: (id: string) => void;
+    onDispatch?:  (id: string) => void;
+    onEscalate?:  (id: string) => void;
 }
 
 export function AlertDrawer({
@@ -28,11 +29,12 @@ export function AlertDrawer({
                                 onApprove,
                                 onIgnore,
                                 onDispatch,
+                                onEscalate,
                             }: AlertDrawerProps) {
     const { hasPermission } = useAuth();
     const [ignoreReason, setIgnoreReason]   = useState('');
     const [showIgnoreBox, setShowIgnoreBox] = useState(false);
-    const [acted, setActed]                 = useState<string | null>(null);
+    const [acted, setActed] = useState<{ label: string; at: string } | null>(null);
 
     // Reset state when alert changes
     useEffect(() => {
@@ -55,7 +57,7 @@ export function AlertDrawer({
     const handleApprove = () => {
         if (!alert) return;
         onApprove(alert.id);
-        setActed('approved');
+        setActed({ label: 'approved', at: formatTime(new Date()) });
     };
 
     const handleIgnore = () => {
@@ -63,14 +65,14 @@ export function AlertDrawer({
         if (!showIgnoreBox) { setShowIgnoreBox(true); return; }
         if (ignoreReason.trim().length < 10) return;
         onIgnore(alert.id, ignoreReason.trim());
-        setActed('ignored');
+        setActed({ label: 'ignored', at: formatTime(new Date()) });
         setShowIgnoreBox(false);
     };
 
     const handleDispatch = () => {
         if (!alert || !onDispatch) return;
         onDispatch(alert.id);
-        setActed('dispatched');
+        setActed({ label: 'dispatched', at: formatTime(new Date()) });
     };
 
     return (
@@ -341,7 +343,7 @@ export function AlertDrawer({
                                         color:         'var(--status-online)',
                                         letterSpacing: '0.06em',
                                     }}>
-                    Action logged: {acted.toUpperCase()} — {formatTime(new Date())}
+                    Action logged: {acted.label.toUpperCase()} — {acted.at}
                   </span>
                                 </div>
                             )}
@@ -413,6 +415,13 @@ export function AlertDrawer({
                                         label="Dispatch"
                                         color="var(--severity-high)"
                                         onClick={handleDispatch}
+                                    />
+                                )}
+                                {onEscalate && alert?.status !== 'escalated' && (
+                                    <DrawerBtn
+                                        label="↑ Escalate"
+                                        color="var(--accent-secondary)"
+                                        onClick={() => { onEscalate(alert!.id); setActed({ label: 'escalated', at: formatTime(new Date()) }); }}
                                     />
                                 )}
                                 <DrawerBtn

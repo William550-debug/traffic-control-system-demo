@@ -65,24 +65,30 @@ function LiveClock({ variant }: { variant: 'wall' | 'operator' }) {
     if (variant === 'wall') {
         return (
             <div style={{ textAlign: 'center' }}>
-                <div style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: '1.6rem',
-                    fontWeight: 300,
-                    letterSpacing: '0.04em',
-                    color: 'var(--text-primary)',
-                    lineHeight: 1,
-                }}>
+                <div
+                    suppressHydrationWarning
+                    style={{
+                        fontFamily:    'var(--font-mono)',
+                        fontSize:      '1.6rem',
+                        fontWeight:    300,
+                        letterSpacing: '0.04em',
+                        color:         'var(--text-primary)',
+                        lineHeight:    1,
+                    }}
+                >
                     {time}
                 </div>
-                <div style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: '0.6rem',
-                    letterSpacing: '0.1em',
-                    color: 'var(--text-muted)',
-                    marginTop: 2,
-                    textTransform: 'uppercase',
-                }}>
+                <div
+                    suppressHydrationWarning
+                    style={{
+                        fontFamily:    'var(--font-mono)',
+                        fontSize:      '0.6rem',
+                        letterSpacing: '0.1em',
+                        color:         'var(--text-muted)',
+                        marginTop:     2,
+                        textTransform: 'uppercase',
+                    }}
+                >
                     {date}
                 </div>
             </div>
@@ -91,22 +97,28 @@ function LiveClock({ variant }: { variant: 'wall' | 'operator' }) {
 
     return (
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-      <span style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: '0.9rem',
-          fontWeight: 500,
-          color: 'var(--text-primary)',
-          letterSpacing: '0.04em',
-      }}>
+      <span
+          suppressHydrationWarning
+          style={{
+              fontFamily:    'var(--font-mono)',
+              fontSize:      '0.9rem',
+              fontWeight:    500,
+              color:         'var(--text-primary)',
+              letterSpacing: '0.04em',
+          }}
+      >
         {time}
       </span>
-            <span style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '0.6rem',
-                color: 'var(--text-muted)',
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-            }}>
+            <span
+                suppressHydrationWarning
+                style={{
+                    fontFamily:    'var(--font-mono)',
+                    fontSize:      '0.6rem',
+                    color:         'var(--text-muted)',
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                }}
+            >
         {date}
       </span>
         </div>
@@ -537,6 +549,11 @@ export function StatusBar({
                         value={formatPercent(health.uptimePercent, 1)}
                     />
                     <Divider />
+                    <HealthMetric
+                        label="Operators"
+                        value={String(health.activeOperators ?? 0)}
+                    />
+                    <Divider />
                     <WeatherBadge />
                     <EventBadge />
                     <Divider />
@@ -557,6 +574,10 @@ export function StatusBar({
                         label="AI"
                         value={formatPercent(health.aiConfidence, 0)}
                         warn={aiWarn}
+                    />
+                    <HealthMetric
+                        label="Ops"
+                        value={String(health.activeOperators ?? 0)}
                     />
                     <Divider />
                     {onEmergencyToggle && (

@@ -29,7 +29,10 @@ function MapLoadingState() {
                 background:'linear-gradient(90deg,transparent,var(--accent-primary),transparent)',
                 opacity:0.2, animation:'scan-line 3s linear infinite',
             }} />
-            <span style={{ position:'relative', fontFamily:'var(--font-mono)', fontSize:'0.6rem', letterSpacing:'0.12em', textTransform:'uppercase', color:'var(--text-muted)' }}>
+            <span style={{
+                position:'relative', fontFamily:'var(--font-mono)', fontSize:'0.6rem',
+                letterSpacing:'0.12em', textTransform:'uppercase', color:'var(--text-muted)',
+            }}>
         LOADING MAP
       </span>
             <div style={{ position:'relative', display:'flex', gap:4 }}>
@@ -60,10 +63,14 @@ export function MapContainer({
                              }: MapContainerProps) {
     const {
         mapState,
+        forecastSlot,
+        historicalHour,
         setViewMode,
         toggleOverlay,
         focusAlert,
         setZoom,
+        setForecastSlot,
+        setHistoricalHour,
         resetView,
         setCenter,
     } = useMap();
@@ -78,10 +85,14 @@ export function MapContainer({
             <GoogleOperatorMap
                 mapState={mapState}
                 alerts={alerts}
+                forecastSlot={forecastSlot}
+                historicalHour={historicalHour}
                 onAlertClick={handleAlertClick}
                 onZoomChange={setZoom}
                 onCenterChange={(lat, lng) => setCenter(lat, lng)}
                 onCorridorClick={onCorridorClick}
+                onForecastSlotChange={setForecastSlot}
+                onHistoricalHourChange={setHistoricalHour}
                 selectedCorridorId={selectedCorridorId}
                 apiKey={MAPS_API_KEY}
             />

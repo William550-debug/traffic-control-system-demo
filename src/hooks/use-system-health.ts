@@ -5,10 +5,40 @@ import { useWsEvent } from '@/providers/websocket-provider';
 import { MOCK_SYSTEM_HEALTH } from '@/lib/mock-data';
 import type { SystemHealth } from '@/types';
 
+function clamp(val: number, min: number, max: number) {
+    return Math.min(max, Math.max(min, val));
+}
+
 export function useSystemHealth(): SystemHealth {
     const [health, setHealth] = useState<SystemHealth>(MOCK_SYSTEM_HEALTH);
 
-    // Update from live WS events
+    // ── Fetch on mount ──────────────────────
+    useEffect(() => {
+        fetch('/api/health')
+            .then(r => r.json())
+            .then((data: SystemHealth) => {
+                setHealth({ ...data, lastRefreshedAt: new Date(data.lastRefreshedAt) });
+            })
+            .catch(() => { /* keep mock */ });
+
+        // Re-fetch every 30s to stay in sync
+        const id = setInterval(() => {
+            fetch('/api/health')
+                .then(r => r.json())
+                .then((data: SystemHealth) => {
+                    setHealth(prev => ({
+                        ...prev,
+                        ...data,
+                        lastRefreshedAt: new Date(),
+                    }));
+                })
+                .catch(() => {});
+        }, 30_000);
+
+        return () => clearInterval(id);
+    }, []);
+
+    // ── WebSocket live updates ──────────────
     useWsEvent<Partial<SystemHealth>>('health:updated', useCallback((event) => {
         setHealth(prev => ({
             ...prev,
@@ -17,8 +47,9 @@ export function useSystemHealth(): SystemHealth {
         }));
     }, []));
 
-    // Simulate minor fluctuation in dev
+    // ── Dev fluctuation ─────────────────────
     useEffect(() => {
+        if (process.env.NODE_ENV !== 'development') return;
         const id = setInterval(() => {
             setHealth(prev => ({
                 ...prev,
@@ -26,13 +57,9 @@ export function useSystemHealth(): SystemHealth {
                 aiConfidence:      clamp(prev.aiConfidence      + (Math.random() - 0.5) * 1,   65, 98),
                 lastRefreshedAt:   new Date(),
             }));
-        }, 8000);
+        }, 8_000);
         return () => clearInterval(id);
     }, []);
 
     return health;
-}
-
-function clamp(val: number, min: number, max: number): number {
-    return Math.min(max, Math.max(min, val));
 }

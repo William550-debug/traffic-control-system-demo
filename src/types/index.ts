@@ -35,6 +35,28 @@ export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
 export type SystemStatus = 'online' | 'degraded' | 'offline';
 
+// ── Operating Mode ─────────────────────────
+export type OperatingMode = 'AI-Prioritized' | 'Human-Validated';
+
+export interface ModeThresholds {
+    trafficVolume:     number;   // vehicles/hour threshold
+    incidentActive:    boolean;
+    weatherImpact:     boolean;
+    eventActive:       boolean;
+    emergencyActive:   boolean;
+    aiConfidenceMin:   number;   // below this → Human-Validated
+}
+
+export interface ModeTransition {
+    id:         string;
+    from:       OperatingMode;
+    to:         OperatingMode;
+    reason:     string;
+    triggeredBy:'auto' | 'manual';
+    triggeredAt: Date;
+    operatorId?: string;
+}
+
 // ── Alerts ────────────────────────────────
 export type AlertType =
     | 'congestion'
@@ -46,8 +68,32 @@ export type AlertType =
     | 'sensor_offline'
     | 'camera_offline';
 
-export type AlertStatus = 'active' | 'acknowledged' | 'resolved' | 'ignored';
-export type AlertPendingAction = 'approve' | 'dispatch' | 'ignore' | null;
+export type AlertStatus = 'active' | 'acknowledged' | 'resolved' | 'ignored' | 'escalated' | 'expired';
+export type AlertPendingAction = 'approve' | 'dispatch' | 'ignore' | 'escalate' | null;
+
+// 1=info(blue) 2=advisory(yellow) 3=elevated(orange) 4=critical(red) 5=emergency(purple)
+export type SeverityLevel = 1 | 2 | 3 | 4 | 5;
+
+export interface AlertImpact {
+    metric: string;    // e.g. "Congestion Index"
+    value:  number;
+    unit:   string;    // e.g. "%", "min", "km"
+}
+
+export interface AlertTimer {
+    expiresAt: Date;
+    urgency:   'normal' | 'critical';
+}
+
+export interface AlertCluster {
+    id:          string;
+    label:       string;   // "5 intersections in Westlands"
+    alertIds:    string[];
+    zone:        string;
+    severity:    Severity;
+    type:        AlertType;
+    totalImpact: number;
+}
 
 export interface AlertLocation {
     lat: number;
@@ -62,20 +108,36 @@ export interface Alert {
     id: string;
     type: AlertType;
     severity: Severity;
+    severityLevel?: SeverityLevel;  // numeric 1-5 for display
     status: AlertStatus;
     title: string;
     description: string;
     location: AlertLocation;
     detectedAt: Date;
     updatedAt: Date;
-    confidence: number; // 0–100
+    expiresAt?: Date;             // for auto-aging
+    confidence: number;           // 0–100
+    confidenceMetadata?: {
+        dataCompleteness: number;   // %
+        lastTrainingUpdate: Date;
+        modelVersion?: string;
+    };
+    impact?: AlertImpact;
+    timer?: AlertTimer;           // countdown for urgent alerts
     affectedIntersections: string[];
+    affectedAgencies?: Agency[];  // cross-agency visibility
     suggestedAction?: string;
     assignedTo?: string;
+    assignedAgency?: Agency;
+    claimedBy?: Agency;           // agency that locked the alert
+    escalatedTo?: string;         // supervisor id
+    escalatedAt?: Date;
+    dismissReason?: string;       // required for ignored/dismissed
     agency?: Agency;
-    occurrenceCount?: number; // for merged alerts
+    occurrenceCount?: number;
     isGrouped?: boolean;
     groupedAlertIds?: string[];
+    clusterId?: string;           // if part of a cluster
 }
 
 // ── AI Recommendations ────────────────────
@@ -163,12 +225,18 @@ export type ActionType =
     | 'alert_approved'
     | 'alert_rejected'
     | 'alert_ignored'
+    | 'alert_escalated'
+    | 'alert_dismissed'
+    | 'alert_claimed'
+    | 'alert_expired'
     | 'signal_adjusted'
     | 'corridor_activated'
     | 'corridor_locked'
     | 'dispatch_sent'
     | 'ai_approved'
     | 'ai_rejected'
+    | 'mode_switched'
+    | 'mode_override'
     | 'emergency_mode_activated'
     | 'emergency_mode_deactivated';
 
@@ -189,10 +257,13 @@ export type WsEventType =
     | 'alert:new'
     | 'alert:updated'
     | 'alert:resolved'
+    | 'alert:escalated'
+    | 'alert:expired'
     | 'recommendation:new'
     | 'corridor:updated'
     | 'action:performed'
     | 'health:updated'
+    | 'mode:changed'
     | 'emergency:activated'
     | 'emergency:deactivated';
 

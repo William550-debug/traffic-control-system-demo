@@ -90,27 +90,33 @@ export const CONFIDENCE_COLORS = {
 } as const;
 
 // ── Time formatting ───────────────────────
-export function formatRelativeTime(date: Date): string {
-  const diff = Date.now() - date.getTime();
+// All date functions accept Date | string | number so stale JSON strings
+// from fetch/WS never cause "date.getTime is not a function".
+function toDate(v: Date | string | number): Date {
+  return v instanceof Date ? v : new Date(v);
+}
+
+export function formatRelativeTime(date: Date | string | number): string {
+  const diff    = Date.now() - toDate(date).getTime();
   const minutes = Math.floor(diff / 60_000);
   const hours   = Math.floor(diff / 3_600_000);
 
   if (minutes < 1)  return 'Just now';
   if (minutes < 60) return `${minutes}m ago`;
   if (hours < 24)   return `${hours}h ago`;
-  return date.toLocaleDateString();
+  return toDate(date).toLocaleDateString();
 }
 
-export function formatTime(date: Date): string {
-  return date.toLocaleTimeString('en-KE', {
-    hour: '2-digit',
+export function formatTime(date: Date | string | number): string {
+  return toDate(date).toLocaleTimeString('en-KE', {
+    hour:   '2-digit',
     minute: '2-digit',
     hour12: false,
   });
 }
 
-export function formatShiftDuration(shiftStart: Date): string {
-  const diff = Date.now() - shiftStart.getTime();
+export function formatShiftDuration(shiftStart: Date | string | number): string {
+  const diff    = Date.now() - toDate(shiftStart).getTime();
   const hours   = Math.floor(diff / 3_600_000);
   const minutes = Math.floor((diff % 3_600_000) / 60_000);
   return `${hours}h ${minutes.toString().padStart(2, '0')}m`;

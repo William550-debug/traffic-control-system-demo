@@ -15,19 +15,25 @@ const DEFAULT_STATE: MapState = {
 };
 
 interface UseMapReturn {
-    mapState: MapState;
-    setCenter:       (lat: number, lng: number, zoom?: number) => void;
-    setZoom:         (zoom: number) => void;
-    setViewMode:     (mode: MapState['viewMode']) => void;
-    toggleOverlay:   (overlay: MapOverlay) => void;
-    focusAlert:      (alertId: string, lat: number, lng: number) => void;
-    focusCorridor:   (corridorId: string) => void;
-    clearFocus:      () => void;
-    resetView:       () => void;
+    mapState:          MapState;
+    forecastSlot:      number;
+    historicalHour:    number;
+    setCenter:         (lat: number, lng: number, zoom?: number) => void;
+    setZoom:           (zoom: number) => void;
+    setViewMode:       (mode: MapState['viewMode']) => void;
+    setForecastSlot:   (slot: number) => void;
+    setHistoricalHour: (hour: number) => void;
+    toggleOverlay:     (overlay: MapOverlay) => void;
+    focusAlert:        (alertId: string, lat: number, lng: number) => void;
+    focusCorridor:     (corridorId: string) => void;
+    clearFocus:        () => void;
+    resetView:         () => void;
 }
 
 export function useMap(): UseMapReturn {
-    const [mapState, setMapState] = useState<MapState>(DEFAULT_STATE);
+    const [mapState, setMapState]             = useState<MapState>(DEFAULT_STATE);
+    const [forecastSlot, setForecastSlot]     = useState(0);
+    const [historicalHour, setHistoricalHour] = useState(5);
 
     const setCenter = useCallback((lat: number, lng: number, zoom?: number) => {
         setMapState(prev => ({
@@ -43,6 +49,8 @@ export function useMap(): UseMapReturn {
 
     const setViewMode = useCallback((mode: MapState['viewMode']) => {
         setMapState(prev => ({ ...prev, viewMode: mode }));
+        if (mode === 'forecast')   setForecastSlot(0);
+        if (mode === 'historical') setHistoricalHour(5);
     }, []);
 
     const toggleOverlay = useCallback((overlay: MapOverlay) => {
@@ -57,9 +65,9 @@ export function useMap(): UseMapReturn {
     const focusAlert = useCallback((alertId: string, lat: number, lng: number) => {
         setMapState(prev => ({
             ...prev,
-            center:           { lat, lng },
-            zoom:             16,
-            focusedAlertId:   alertId,
+            center:            { lat, lng },
+            zoom:              16,
+            focusedAlertId:    alertId,
             focusedCorridorId: undefined,
         }));
     }, []);
@@ -82,13 +90,19 @@ export function useMap(): UseMapReturn {
 
     const resetView = useCallback(() => {
         setMapState(DEFAULT_STATE);
+        setForecastSlot(0);
+        setHistoricalHour(5);
     }, []);
 
     return {
         mapState,
+        forecastSlot,
+        historicalHour,
         setCenter,
         setZoom,
         setViewMode,
+        setForecastSlot,
+        setHistoricalHour,
         toggleOverlay,
         focusAlert,
         focusCorridor,

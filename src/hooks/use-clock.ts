@@ -3,21 +3,13 @@
 import { useState, useEffect } from 'react';
 
 interface ClockState {
-    time: string;       // HH:MM:SS
-    date: string;       // Mon 10 Mar 2026
-    seconds: number;    // raw seconds for animations
+    time:    string;   // HH:MM:SS
+    date:    string;   // Mon 10 Mar 2026
+    seconds: number;   // raw seconds for animations
 }
 
-export function useClock(): ClockState {
-    const [state, setState] = useState<ClockState>(() => getClockState());
-
-    useEffect(() => {
-        const id = setInterval(() => setState(getClockState()), 1000);
-        return () => clearInterval(id);
-    }, []);
-
-    return state;
-}
+// Empty state rendered on the server — avoids SSR/CSR time mismatch
+const EMPTY: ClockState = { time: '--:--:--', date: '---', seconds: 0 };
 
 function getClockState(): ClockState {
     const now = new Date();
@@ -36,4 +28,20 @@ function getClockState(): ClockState {
         }),
         seconds: now.getSeconds(),
     };
+}
+
+export function useClock(): ClockState {
+    // Start with empty placeholder — server and first client render agree
+    const [state, setState] = useState<ClockState>(EMPTY);
+    const [mounted, setMounted] = useState(false);
+
+    // After mount, populate immediately then tick every second
+    useEffect(() => {
+        setMounted(true);
+        setState(getClockState());
+        const id = setInterval(() => setState(getClockState()), 1000);
+        return () => clearInterval(id);
+    }, []);
+
+    return mounted ? state : EMPTY;
 }

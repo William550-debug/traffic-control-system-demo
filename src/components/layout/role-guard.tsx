@@ -132,6 +132,7 @@ export function AgencyContextBanner() {
 
 // ── Role switcher (dev/supervisor tool) ────
 export function RoleSwitcher() {
+    if (process.env.NODE_ENV !== 'development') return null;
     const { user, login } = useAuth();
     if (!user) return null;
 

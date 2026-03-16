@@ -5,12 +5,15 @@ import { StatusBar }                from '@/components/status-bar/status-bar';
 import { MapContainer }             from '@/components/map/map-container';
 import { AlertPanel }               from '@/components/alerts/alert-panel';
 import { AlertDrawer }              from '@/components/alerts/alert-drawer';
+import { CrisisOverlay }            from '@/components/alerts/crisis-overlay';
 import { AIRecommendationCard }     from '@/components/ai/ai-recommendation-card';
 import { PredictiveStrip }          from '@/components/predictive/predictive-strip';
 import { ActivityFeed }             from '@/components/activity/activity-feed';
 import { AgencyContextBanner, RoleSwitcher } from '@/components/layout/role-guard';
-import { CorridorControlPanel }     from '@/components/corridor/CorridorControlPanel';
-import { ErrorBoundary }            from '@/components/layout/Error-Boundary';
+import { CorridorControlPanel }     from "@/components/corridor/CorridorControlPanel"
+import { ErrorBoundary }            from "@/components/layout/Error-Boundary"
+import { ModeBanner }               from '@/components/modes/mode-banner';
+import { ModeProvider }             from '@/providers/mode-provider';
 import {
     AlertPanelSkeleton,
     MapSkeleton,
@@ -32,7 +35,7 @@ export function OperatorShell() {
 
     const { user } = useAuth();
 
-    const { alerts, acknowledgeAlert, ignoreAlert, dispatchAlert, pendingActions } = useAlerts();
+    const { alerts, acknowledgeAlert, ignoreAlert, dispatchAlert, escalateAlert, pendingActions } = useAlerts();
     const { recommendations, approve: approveRec, reject: rejectRec, modify: modifyRec } = useRecommendations();
     const { logAction } = useAuditLog();
     const {
@@ -87,7 +90,7 @@ export function OperatorShell() {
     }, [acknowledgeAlert, alerts, user, logAction]);
 
     const handleIgnore = useCallback((id: string, reason?: string) => {
-        ignoreAlert(id);
+        ignoreAlert(id, reason);
         const alert = alerts.find(a => a.id === id);
         if (user && alert) {
             logAction({
@@ -109,6 +112,31 @@ export function OperatorShell() {
             });
         }
     }, [dispatchAlert, alerts, user, logAction]);
+
+    const handleEscalate = useCallback((id: string) => {
+        escalateAlert(id);
+        const alert = alerts.find(a => a.id === id);
+        if (user && alert) {
+            logAction({
+                type: 'alert_escalated', performedBy: user.name,
+                agency: user.agency, targetId: id, targetLabel: alert.title,
+            });
+        }
+    }, [escalateAlert, alerts, user, logAction]);
+
+    const handleApproveAll = useCallback((ids: string[]) => {
+        ids.forEach(id => {
+            acknowledgeAlert(id);
+            const alert = alerts.find(a => a.id === id);
+            if (user && alert) {
+                logAction({
+                    type: 'alert_approved', performedBy: user.name,
+                    agency: user.agency, targetId: id, targetLabel: alert.title,
+                    details: { bulk: true },
+                });
+            }
+        });
+    }, [acknowledgeAlert, alerts, user, logAction]);
 
     // ── AI recs ───────────────────────────────
     const handleApproveRec = useCallback((id: string) => {
@@ -152,108 +180,119 @@ export function OperatorShell() {
         }
     }, [updateTiming, corridors, user, logAction]);
 
+    const canOverride = user?.role === 'supervisor' || user?.permissions.includes('override_emergency') || false;
+
     return (
-        <div style={{
-            display:             'grid',
-            gridTemplateRows:    'var(--status-bar-h) 1fr 140px',
-            gridTemplateColumns: '1fr 300px',
-            height:              '100dvh',
-            overflow:            'hidden',
-            background:          'var(--bg-void)',
-        }}>
+        <ModeProvider canOverride={canOverride}>
+            <ModeBanner />
 
-            {/* ── Status Bar ── */}
-            <div style={{ gridColumn: '1 / -1' }}>
-                <ErrorBoundary label="Status Bar" fallback={<StatusBarSkeleton />}>
-                    <StatusBar
-                        variant="operator"
-                        isEmergencyMode={isEmergency}
-                        onEmergencyToggle={toggleEmergency}
-                    />
-                </ErrorBoundary>
-            </div>
+            <CrisisOverlay alerts={alerts} />
 
-            {/* ── Map ── */}
-            <div style={{ position: 'relative', overflow: 'hidden' }}>
-                <ErrorBoundary label="Map" fallback={<MapSkeleton />}>
-                    <Suspense fallback={<MapSkeleton />}>
-                        <MapContainer
-                            alerts={alerts}
-                            onAlertClick={openAlert}
-                            onCorridorClick={handleCorridorClick}
-                            selectedCorridorId={selectedCorridor?.id}
+            <div style={{
+                display:             'grid',
+                gridTemplateRows:    'var(--status-bar-h) 1fr 140px',
+                gridTemplateColumns: '1fr 300px',
+                height:              '100dvh',
+                overflow:            'hidden',
+                background:          'var(--bg-void)',
+            }}>
+
+                {/* ── Status Bar ── */}
+                <div style={{ gridColumn: '1 / -1' }}>
+                    <ErrorBoundary label="Status Bar" fallback={<StatusBarSkeleton />}>
+                        <StatusBar
+                            variant="operator"
+                            isEmergencyMode={isEmergency}
+                            onEmergencyToggle={toggleEmergency}
                         />
-                    </Suspense>
-                </ErrorBoundary>
+                    </ErrorBoundary>
+                </div>
 
-                <AgencyContextBanner />
+                {/* ── Map ── */}
+                <div style={{ position: 'relative', overflow: 'hidden' }}>
+                    <ErrorBoundary label="Map" fallback={<MapSkeleton />}>
+                        <Suspense fallback={<MapSkeleton />}>
+                            <MapContainer
+                                alerts={alerts}
+                                onAlertClick={openAlert}
+                                onCorridorClick={handleCorridorClick}
+                                selectedCorridorId={selectedCorridor?.id}
+                            />
+                        </Suspense>
+                    </ErrorBoundary>
 
-                <AIRecommendationCard
-                    recommendations={recommendations}
-                    onApprove={handleApproveRec}
-                    onReject={handleRejectRec}
-                    onModify={modifyRec}
+                    <AgencyContextBanner />
+
+                    <AIRecommendationCard
+                        recommendations={recommendations}
+                        onApprove={handleApproveRec}
+                        onReject={handleRejectRec}
+                        onModify={modifyRec}
+                    />
+
+                    <RoleSwitcher />
+
+                    {isEmergency && (
+                        <div style={{
+                            position:      'absolute',
+                            inset:         0,
+                            background:    'rgba(168,85,247,0.04)',
+                            pointerEvents: 'none',
+                            animation:     'fade-in 400ms ease',
+                        }} />
+                    )}
+                </div>
+
+                {/* ── Alert Panel ── */}
+                <div style={{ overflow: 'hidden' }}>
+                    <ErrorBoundary label="Alerts" fallback={<AlertPanelSkeleton />}>
+                        <AlertPanel
+                            alerts={alerts}
+                            focusedAlertId={focusedAlertId}
+                            pendingActions={pendingActions}
+                            onAlertSelect={openAlert}
+                            onApprove={handleApprove}
+                            onIgnore={handleIgnore}
+                            onDispatch={handleDispatch}
+                            onEscalate={handleEscalate}
+                            onApproveAll={handleApproveAll}
+                        />
+                    </ErrorBoundary>
+                </div>
+
+                {/* ── Predictive strip ── */}
+                <div>
+                    <ErrorBoundary label="Predictive" fallback={<PredictiveSkeleton />}>
+                        <PredictiveStrip />
+                    </ErrorBoundary>
+                </div>
+
+                {/* ── Activity feed ── */}
+                <div>
+                    <ErrorBoundary label="Activity" fallback={<ActivityFeedSkeleton />}>
+                        <ActivityFeed />
+                    </ErrorBoundary>
+                </div>
+
+                {/* ── Alert detail drawer ── */}
+                <AlertDrawer
+                    alert={drawerAlert}
+                    onClose={closeDrawer}
+                    onApprove={handleApprove}
+                    onIgnore={handleIgnore}
+                    onDispatch={handleDispatch}
+                    onEscalate={handleEscalate}
                 />
 
-                <RoleSwitcher />
-
-                {isEmergency && (
-                    <div style={{
-                        position:      'absolute',
-                        inset:         0,
-                        background:    'rgba(168,85,247,0.04)',
-                        pointerEvents: 'none',
-                        animation:     'fade-in 400ms ease',
-                    }} />
-                )}
+                {/* ── Corridor control drawer ── */}
+                <CorridorControlPanel
+                    corridor={selectedCorridor}
+                    onClose={clearCorridor}
+                    onUpdateTiming={handleUpdateTiming}
+                    onLock={lockCorridor}
+                    onUnlock={unlockCorridor}
+                />
             </div>
-
-            {/* ── Alert Panel ── */}
-            <div style={{ overflow: 'hidden' }}>
-                <ErrorBoundary label="Alerts" fallback={<AlertPanelSkeleton />}>
-                    <AlertPanel
-                        alerts={alerts}
-                        focusedAlertId={focusedAlertId}
-                        pendingActions={pendingActions}
-                        onAlertSelect={openAlert}
-                        onApprove={handleApprove}
-                        onIgnore={handleIgnore}
-                        onDispatch={handleDispatch}
-                    />
-                </ErrorBoundary>
-            </div>
-
-            {/* ── Predictive strip ── */}
-            <div>
-                <ErrorBoundary label="Predictive" fallback={<PredictiveSkeleton />}>
-                    <PredictiveStrip />
-                </ErrorBoundary>
-            </div>
-
-            {/* ── Activity feed ── */}
-            <div>
-                <ErrorBoundary label="Activity" fallback={<ActivityFeedSkeleton />}>
-                    <ActivityFeed />
-                </ErrorBoundary>
-            </div>
-
-            {/* ── Alert detail drawer ── */}
-            <AlertDrawer
-                alert={drawerAlert}
-                onClose={closeDrawer}
-                onApprove={handleApprove}
-                onIgnore={handleIgnore}
-                onDispatch={handleDispatch}
-            />
-
-            {/* ── Corridor control drawer ── */}
-            <CorridorControlPanel
-                corridor={selectedCorridor}
-                onClose={clearCorridor}
-                onUpdateTiming={handleUpdateTiming}
-                onLock={lockCorridor}
-                onUnlock={unlockCorridor}
-            />
-        </div>
+        </ModeProvider>
     );
 }
