@@ -16,7 +16,7 @@ const SESSION_KEY = 'cmd_center_user_id';
 const MOCK_USERS: Record<string, User> = {
     'traffic-01': {
         id: 'traffic-01',
-        name: 'Amina Osei',
+        name: 'Lucy Njeri',
         initials: 'AO',
         role: 'traffic_operator',
         agency: 'traffic',
@@ -25,7 +25,7 @@ const MOCK_USERS: Record<string, User> = {
     },
     'emergency-01': {
         id: 'emergency-01',
-        name: 'David Kimani',
+        name: 'William Macharia',
         initials: 'DK',
         role: 'emergency_coordinator',
         agency: 'emergency',
@@ -34,7 +34,7 @@ const MOCK_USERS: Record<string, User> = {
     },
     'supervisor-01': {
         id: 'supervisor-01',
-        name: 'Fatima Nkosi',
+        name: 'John Doe',
         initials: 'FN',
         role: 'supervisor',
         agency: 'traffic',
