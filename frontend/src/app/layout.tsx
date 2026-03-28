@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { AuthProvider }      from '@/providers/auth-provider';
 import { WebSocketProvider } from '@/providers/websocket-provider';
-
+import { Toaster } from 'react-hot-toast';
 export const metadata: Metadata = {
     title:       'Command Center — Traffic Management',
     description: 'Multi-agency traffic management command and control system',
@@ -27,6 +27,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <AuthProvider>
             <WebSocketProvider>
                 {children}
+                <Toaster position="top-right" />
+              
             </WebSocketProvider>
         </AuthProvider>
         </body>

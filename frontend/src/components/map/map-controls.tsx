@@ -17,7 +17,7 @@ const OVERLAYS: { key: MapOverlay; label: string; icon: string }[] = [
     { key: 'cameras',     label: 'Cameras',   icon: '📷' },
     { key: 'signals',     label: 'Signals',   icon: '🚦' },
     { key: 'incidents',   label: 'Incidents', icon: '⚠️' },
-    { key: 'parking',     label: 'Parking',   icon: '🅿️' },
+    { key: 'parking',     label: 'parking',   icon: '🅿️' },
     { key: 'transport',   label: 'Transit',   icon: '🚌' },
     { key: 'weather',     label: 'Weather',   icon: '🌧' },
     { key: 'predictions', label: 'Predict',   icon: '🔮' },

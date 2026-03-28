@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
-import { useWsEvent }   from '@/providers/websocket-provider';
-import { MOCK_ACTIONS } from '@/lib/mock-data';
+import { useWsEvent }    from '@/providers/websocket-provider';
+import { MOCK_ACTIONS }  from '@/lib/mock-data';
 import { reviveAuditAction } from '@/lib/revive';
 import type { AuditAction, ActionType, Agency } from '@/types';
 
@@ -22,7 +22,11 @@ interface UseAuditLogReturn {
     logAction: (args: LogActionArgs) => void;
 }
 
-// Fire-and-forget POST to audit API — never throws
+// ── API helper ────────────────────────────────────────────────────────────────
+// Fire-and-forget POST to /api/audit — never throws.
+// Backend accepts: { type, performedBy, agency, targetId, targetLabel, details }
+// Timestamp is serialised to ISO string for JSON transport.
+
 async function persistAction(action: AuditAction): Promise<void> {
     try {
         await fetch('/api/audit', {
@@ -30,7 +34,6 @@ async function persistAction(action: AuditAction): Promise<void> {
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify({
                 ...action,
-                // Date → ISO string for JSON transport
                 timestamp: action.timestamp.toISOString(),
             }),
         });
@@ -39,18 +42,28 @@ async function persistAction(action: AuditAction): Promise<void> {
     }
 }
 
+// ── Hook ──────────────────────────────────────────────────────────────────────
+
 export function useAuditLog(): UseAuditLogReturn {
     const [actions, setActions] = useState<AuditAction[]>(MOCK_ACTIONS);
-    // Stable ref so logAction never re-creates on re-render
+    // Stable ref so logAction is never re-created on re-render
     const setActionsRef = useRef(setActions);
     setActionsRef.current = setActions;
 
+    // ── WebSocket — other operators' actions ──────────────────────────────────
+    // The backend emits 'action:performed' after every addAudit() call.
+    // This keeps the activity feed live across multiple operator sessions.
     useWsEvent<AuditAction>('action:performed', useCallback((event) => {
         const action = reviveAuditAction(event.payload);
         setActionsRef.current(prev =>
-            [action, ...prev].slice(0, MAX_FEED_SIZE)
+            [action, ...prev].slice(0, MAX_FEED_SIZE),
         );
     }, []));
+
+    // ── logAction ─────────────────────────────────────────────────────────────
+    // 1. Builds a typed AuditAction with a stable local ID + current timestamp.
+    // 2. Prepends to local state immediately (optimistic).
+    // 3. POSTs to /api/audit asynchronously — fire-and-forget.
 
     const logAction = useCallback((args: LogActionArgs) => {
         const action: AuditAction = {
@@ -64,10 +77,7 @@ export function useAuditLog(): UseAuditLogReturn {
             details:     args.details,
         };
 
-        // Optimistic local update first
         setActionsRef.current(prev => [action, ...prev].slice(0, MAX_FEED_SIZE));
-
-        // Persist asynchronously — non-blocking
         void persistAction(action);
     }, []);
 

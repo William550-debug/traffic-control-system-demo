@@ -7,7 +7,7 @@ No existing logic is replaced — all additions are additive.
 
 ## 1. Alert Aging (`use-alert-aging.ts`)
 
-### Wire into `use-alerts.ts`
+### Wire into `use-alertRouter.ts`
 
 ```ts
 // Add import at top
@@ -45,7 +45,7 @@ import { AgeClock } from '@/components/alerts/claim-banner';
 
 ## 2. Cross-Agency Claim (`use-alert-claim.ts` + `claim-banner.tsx`)
 
-### Wire into `use-alerts.ts`
+### Wire into `use-alertRouter.ts`
 
 Add two handlers so `useAlertClaim` can update local state:
 
@@ -214,7 +214,7 @@ case 'release':
 
 | File to edit | Change |
 |---|---|
-| `src/hooks/use-alerts.ts` | Add `useAlertAging` call + `useAlertClaim` + expose 4 new fields |
+| `src/hooks/use-alertRouter.ts` | Add `useAlertAging` call + `useAlertClaim` + expose 4 new fields |
 | `src/components/alerts/alert-card.tsx` | Add `ClaimBanner`, `ClaimButton`, `AgeClock` |
 | `src/components/alerts/alert-drawer.tsx` | Add `ClaimBanner`, `ClaimButton` |
 | `src/components/layout/operator-shell.tsx` | Destructure + pass new props |

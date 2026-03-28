@@ -13,8 +13,7 @@
  *  - onDispatch now carries DispatchService payload for full round-trip
  *  - ModeStrip popover: replaced raw <button> confirm/cancel with shadcn Button
  */
-
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
     AlertTriangle,
     Flame,
@@ -34,34 +33,24 @@ import {
     ToggleLeft,
     ToggleRight,
     ArrowLeftRight,
-    Activity,
     TrendingUp,
     TrendingDown,
     Minus,
-    RefreshCw,
-    Wifi,
     Filter,
-    Zap,
-    Sparkles,
 } from 'lucide-react';
-import { AlertCard }                        from './alert-card';
+import { AlertCard } from './alert-card';
 import { AlertClusterGroup, clusterAlerts } from './alert-cluster';
 import type { Alert, Severity, AlertType, AlertPendingAction, OperatingMode } from '@/types';
 import { SEVERITY_COLORS, ALERT_TYPE_LABELS, sortBySeverity } from '@/lib/utils';
-import { useMode }   from '@/providers/mode-provider';
-import { useAuth }   from '@/providers/auth-provider';
-import { Badge }     from '@/components/ui/badge';
-import { Button }    from '@/components/ui/button';
-import { Progress }  from '@/components/ui/progress';
+import { useMode } from '@/providers/mode-provider';
+import { useAuth } from '@/providers/auth-provider';
+import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import {
-    Tabs, TabsList, TabsTrigger, TabsContent,
-} from '@/components/ui/tabs';
-import {
-    Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
-} from '@/components/ui/tooltip';
-import { useAlerts } from '@/hooks/use-alerts';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { useAlerts } from "@/hooks/use-alerts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -77,10 +66,16 @@ interface AlertPanelProps {
     onDispatch?:     (id: string, service?: DispatchService) => void;
     onEscalate?:     (id: string) => void;
     onApproveAll?:   (ids: string[]) => void;
+    // Claim logic passed from shell
+    onClaim?:        (id: string) => void;
+    onRelease?:      (id: string) => void;
+    isClaiming?:     (id: string) => boolean;
+    isReleasing?:    (id: string) => boolean;
 }
 
 type FilterSeverity = Severity | 'all';
 type FilterType     = AlertType | 'all';
+
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -98,44 +93,34 @@ const MAX_VISIBLE_PER_GROUP       = 3;
 // ─── Live header indicator ────────────────────────────────────────────────────
 
 function LiveIndicator() {
-    const [lastUpdated, setLastUpdated] = useState(new Date());
-    const [secondsAgo,  setSecondsAgo]  = useState(0);
+    // Initialize with null to keep the render function pure
+    const [now, setNow] = useState<number | null>(null);
+    const lastUpdated = useRef<number | null>(null);
 
     useEffect(() => {
-        // Simulate feed refreshing every 7s
-        const refresh = setInterval(() => setLastUpdated(new Date()), 7000);
-        return () => clearInterval(refresh);
+        // 2. Perform the "impure" timestamp grab only after the component mounts
+        const startTime = Date.now();
+        lastUpdated.current = startTime;
+        setNow(startTime);
+
+        // 3. Start your ticker
+        const tick = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(tick);
     }, []);
 
-    useEffect(() => {
-        setSecondsAgo(0);
-        const tick = setInterval(() => setSecondsAgo(s => s + 1), 1000);
-        return () => clearInterval(tick);
-    }, [lastUpdated]);
+    // 4. Handle the initial "null" state gracefully
+    if (!now || !lastUpdated.current) return null;
+
+    const secondsAgo = Math.floor((now - lastUpdated.current) / 1000);
 
     return (
         <div className="flex items-center gap-1.5 shrink-0">
-            {/* Pulsing live dot */}
             <span className="relative flex h-2 w-2 shrink-0">
-                <span
-                    className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-60"
-                    style={{ background: 'var(--status-online)' }}
-                />
-                <span
-                    className="relative inline-flex rounded-full h-2 w-2"
-                    style={{ background: 'var(--status-online)' }}
-                />
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-60 bg-emerald-500" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
             </span>
-            <span
-                className="text-[0.48rem] tracking-[0.08em] uppercase"
-                style={{ color: 'var(--status-online)', fontFamily: 'var(--font-mono)' }}
-            >
-                LIVE
-            </span>
-            <span
-                className="text-[0.46rem]"
-                style={{ color: 'var(--text-disabled)', fontFamily: 'var(--font-mono)' }}
-            >
+            <span className="text-[0.48rem] tracking-[0.08em] uppercase font-mono text-emerald-500">LIVE</span>
+            <span className="text-[0.46rem] text-white/40 font-mono">
                 · {secondsAgo < 5 ? 'just now' : `${secondsAgo}s ago`}
             </span>
         </div>
@@ -236,13 +221,7 @@ function SeverityPill({
 // ─── Mode strip ───────────────────────────────────────────────────────────────
 
 function ModeStrip({ isHumanMode }: { isHumanMode: boolean }) {
-    const {
-        currentMode,
-        manualOverride,
-        autoTransitionEnabled,
-        setAutoTransition,
-        canOverride,
-    } = useMode();
+    const { manualOverride, autoTransitionEnabled, setAutoTransition, canOverride } = useMode();
     const { user } = useAuth();
 
     const [open,   setOpen]   = useState(false);

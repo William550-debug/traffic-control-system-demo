@@ -1,56 +1,21 @@
 'use client';
 
 import {
-    createContext,
-    useContext,
-    useState,
-    useCallback,
-    useEffect,
-    type ReactNode,
+    createContext, useContext, useState,
+    useCallback, useEffect, type ReactNode,
 } from 'react';
 import type { User, Agency, UserRole, Permission } from '@/types';
 
 const SESSION_KEY = 'cmd_center_user_id';
+const TOKEN_KEY   = 'cmd_center_token';
+const BACKEND     = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:4000';
 
-// ── Mock users ────────────────────────────
-const MOCK_USERS: Record<string, User> = {
-    'traffic-01': {
-        id: 'traffic-01',
-        name: 'Amina Osei',
-        initials: 'AO',
-        role: 'traffic_operator',
-        agency: 'traffic',
-        shiftStart: new Date(Date.now() - 2 * 60 * 60 * 1000),
-        permissions: ['approve_signal', 'activate_corridor'],
-    },
-    'emergency-01': {
-        id: 'emergency-01',
-        name: 'David Kimani',
-        initials: 'DK',
-        role: 'emergency_coordinator',
-        agency: 'emergency',
-        shiftStart: new Date(Date.now() - 4 * 60 * 60 * 1000),
-        permissions: ['approve_signal', 'activate_corridor', 'dispatch_unit', 'override_emergency'],
-    },
-    'supervisor-01': {
-        id: 'supervisor-01',
-        name: 'Fatima Nkosi',
-        initials: 'FN',
-        role: 'supervisor',
-        agency: 'traffic',
-        shiftStart: new Date(Date.now() - 6 * 60 * 60 * 1000),
-        permissions: [
-            'approve_signal', 'activate_corridor', 'dispatch_unit',
-            'override_emergency', 'view_planning', 'manage_transport',
-        ],
-    },
-};
-
-// ── Context ───────────────────────────────
 interface AuthContextValue {
     user:          User | null;
+    token:         string | null;
     isLoading:     boolean;
-    login:         (userId: string) => void;
+    error:         string | null;
+    login:         (userId: string, pin: string) => Promise<boolean>;
     logout:        () => void;
     hasPermission: (permission: Permission) => boolean;
     isAgency:      (agency: Agency) => boolean;
@@ -60,57 +25,107 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-    // Rehydrate from sessionStorage on first render
-    const [user, setUser] = useState<User | null>(() => {
-        if (typeof window === 'undefined') return null;
-        const saved = sessionStorage.getItem(SESSION_KEY);
-        return saved ? (MOCK_USERS[saved] ?? null) : null;
-    });
-    const [isLoading, setIsLoading] = useState(false);
+    const [user,      setUser]      = useState<User | null>(null);
+    const [token,     setToken]     = useState<string | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error,     setError]     = useState<string | null>(null);
 
-    const login = useCallback((userId: string) => {
-        setIsLoading(true);
-        setTimeout(() => {
-            const u = MOCK_USERS[userId] ?? null;
-            const freshUser = u ? { ...u, shiftStart: new Date() } : null;
-            setUser(freshUser);
-            if (freshUser) {
-                sessionStorage.setItem(SESSION_KEY, userId);
-                // Mirror to cookie so middleware can read it (session-scoped, no expiry = tab cookie)
-                document.cookie = `${SESSION_KEY}=${userId}; path=/; SameSite=Strict`;
+    // Rehydrate session on mount
+    useEffect(() => {
+        const savedToken  = sessionStorage.getItem(TOKEN_KEY);
+        const savedUserId = sessionStorage.getItem(SESSION_KEY);
+
+        if (!savedToken || !savedUserId) { setIsLoading(false); return; }
+
+        fetch(`${BACKEND}/api/auth/me`, {
+            headers: {
+                Authorization:   `Bearer ${savedToken}`,
+                'X-Operator-Id': savedUserId,
+            },
+        })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok && data.data?.user) {
+                    const u = reviveDates(data.data.user);
+                    setUser(u); setToken(savedToken);
+                    syncOperatorGlobal(u.name);
+                } else {
+                    clearSession();
+                }
+            })
+            .catch(() => {
+                // Backend unreachable — restore from cache so UI still works
+                const cached = sessionStorage.getItem('cmd_center_user_cache');
+                if (cached) {
+                    try {
+                        const u = reviveDates(JSON.parse(cached));
+                        setUser(u); setToken(savedToken);
+                        syncOperatorGlobal(u.name);
+                    } catch { clearSession(); }
+                } else { clearSession(); }
+            })
+            .finally(() => setIsLoading(false));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const login = useCallback(async (userId: string, pin: string): Promise<boolean> => {
+        setIsLoading(true); setError(null);
+        try {
+            const res = await fetch(`${BACKEND}/api/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId, pin }), // Sends both to backend
+            });
+
+            const data = await res.json();
+
+            if (!res.ok || !data.ok) {
+                setError(data.error ?? 'Login failed');
+                setIsLoading(false);
+                return false;
             }
+
+            const loggedInUser: User = reviveDates(data.data.user);
+            const authToken: string  = data.data.token;
+
+            setUser(loggedInUser); setToken(authToken);
+
+            sessionStorage.setItem(SESSION_KEY,             loggedInUser.id);
+            sessionStorage.setItem(TOKEN_KEY,               authToken);
+            sessionStorage.setItem('cmd_center_user_cache', JSON.stringify(loggedInUser));
+            document.cookie = `${SESSION_KEY}=${loggedInUser.id}; path=/; SameSite=Strict`;
+            syncOperatorGlobal(loggedInUser.name);
+
             setIsLoading(false);
-        }, 600);
+            return true;
+        } catch (err) {
+            console.error('[AUTH]', err);
+            setError('Cannot reach authentication server');
+            setIsLoading(false);
+            return false;
+        }
     }, []);
 
     const logout = useCallback(() => {
-        setUser(null);
-        sessionStorage.removeItem(SESSION_KEY);
-        // Clear cookie
-        document.cookie = `${SESSION_KEY}=; path=/; max-age=0; SameSite=Strict`;
-    }, []);
+        if (token) {
+            fetch(`${BACKEND}/api/auth/logout`, {
+                method: 'POST', headers: { Authorization: `Bearer ${token}` },
+            }).catch(() => {});
+        }
+        clearSession(); setUser(null); setToken(null);
+    }, [token]);
 
     const hasPermission = useCallback(
-        (permission: Permission) => user?.permissions.includes(permission) ?? false,
-        [user]
+        (p: Permission) => user?.permissions.includes(p) ?? false, [user]
     );
-
-    const isAgency = useCallback(
-        (agency: Agency) => user?.agency === agency,
-        [user]
-    );
-
-    const canManage = useCallback(
-        (targetAgency: Agency) => {
-            if (!user) return false;
-            if (user.role === 'supervisor') return true;
-            return user.agency === targetAgency;
-        },
-        [user]
-    );
+    const isAgency  = useCallback((a: Agency) => user?.agency === a, [user]);
+    const canManage = useCallback((targetAgency: Agency) => {
+        if (!user) return false;
+        return user.role === 'supervisor' || user.agency === targetAgency;
+    }, [user]);
 
     return (
-        <AuthContext.Provider value={{ user, isLoading, login, logout, hasPermission, isAgency, canManage }}>
+        <AuthContext.Provider value={{ user, token, isLoading, error, login, logout, hasPermission, isAgency, canManage }}>
             {children}
         </AuthContext.Provider>
     );
@@ -122,30 +137,55 @@ export function useAuth(): AuthContextValue {
     return ctx;
 }
 
-// ── Helpers ───────────────────────────────
-export const MOCK_USER_IDS = Object.keys(MOCK_USERS);
+function reviveDates(user: Record<string, unknown>): User {
+    return { ...user, shiftStart: user.shiftStart ? new Date(user.shiftStart as string) : new Date() } as User;
+}
+
+function clearSession(): void {
+    sessionStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem('cmd_center_user_cache');
+    document.cookie = `${SESSION_KEY}=; path=/; max-age=0; SameSite=Strict`;
+}
+
+function syncOperatorGlobal(name: string): void {
+    if (typeof window !== 'undefined') {
+        (window as Window & { __atmsOperator?: string }).__atmsOperator = name;
+    }
+}
+
+export type { AuthContextValue };
 
 export const ROLE_LABELS: Record<UserRole, string> = {
-    traffic_operator:      'Traffic Ops',
-    emergency_coordinator: 'Emergency',
-    transport_manager:     'Transport',
-    planning_analyst:      'Planning',
-    supervisor:            'Supervisor',
+    traffic_operator: 'Traffic Ops', emergency_coordinator: 'Emergency',
+    transport_manager: 'Transport',  planning_analyst: 'Planning', supervisor: 'Supervisor',
 };
-
 export const AGENCY_LABELS: Record<Agency, string> = {
-    traffic:   'Traffic Control',
-    emergency: 'Emergency Services',
-    transport: 'Public Transport',
-    planning:  'City Planning',
+    traffic: 'Traffic Control', emergency: 'Emergency Services',
+    transport: 'Public Transport', planning: 'City Planning',
 };
-
 export const AGENCY_COLORS: Record<Agency, string> = {
-    traffic:   '#3b9eff',
-    emergency: '#ff3b3b',
-    transport: '#22c55e',
-    planning:  '#f5c518',
+    traffic: '#3b9eff', emergency: '#ff3b3b', transport: '#22c55e', planning: '#f5c518',
 };
 
-// Expose mock users for the login page
-export { MOCK_USERS };
+// Login page user picker — matches backend routes/authRouter.ts USERS
+// providers/auth-provider.tsx
+
+// Ensure LOGIN_USERS matches the User interface properties
+export const LOGIN_USERS: User[] = [
+    {
+        id: 'traffic-01', name: 'Lucy Njeri', role: 'traffic_operator',
+        initials: 'LN', agency: 'traffic', shiftStart: new Date(),
+        permissions: ['approve_signal', 'activate_corridor']
+    },
+    {
+        id: 'emergency-01', name: 'William Macharia', role: 'emergency_coordinator',
+        initials: 'WM', agency: 'emergency', shiftStart: new Date(),
+        permissions: ['dispatch_unit', 'override_emergency']
+    },
+    {
+        id: 'supervisor-01', name: 'John Doe', role: 'supervisor',
+        initials: 'JD', agency: 'traffic', shiftStart: new Date(),
+        permissions: ['manage_transport', 'override_emergency']
+    },
+];

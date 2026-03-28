@@ -12,15 +12,15 @@ interface AIRecommendationCardProps {
     onModify:  (id: string) => void;
 }
 
-// ── Single recommendation item ────────────
+// ── Single recommendation item ─────────────────────────────────────────────
 function RecommendationItem({
-                                rec,
-                                isActive,
-                                onActivate,
-                                onApprove,
-                                onReject,
-                                onModify,
-                            }: {
+    rec,
+    isActive,
+    onActivate,
+    onApprove,
+    onReject,
+    onModify,
+}: {
     rec:        Recommendation;
     isActive:   boolean;
     onActivate: () => void;
@@ -28,7 +28,7 @@ function RecommendationItem({
     onReject:   (id: string, reason: string) => void;
     onModify:   (id: string) => void;
 }) {
-    const { hasPermission }             = useAuth();
+    const { hasPermission }                 = useAuth();
     const [showRejectBox, setShowRejectBox] = useState(false);
     const [rejectReason, setRejectReason]   = useState('');
     const [acted, setActed]                 = useState<string | null>(null);
@@ -36,15 +36,8 @@ function RecommendationItem({
     const confLevel = confidenceLevel(rec.confidence);
     const confColor = CONFIDENCE_COLORS[confLevel];
 
-    const handleApprove = () => {
-        onApprove(rec.id);
-        setActed('approved');
-    };
-
-    const handleModify = () => {
-        onModify(rec.id);
-        setActed('modified');
-    };
+    const handleApprove = () => { onApprove(rec.id); setActed('approved'); };
+    const handleModify  = () => { onModify(rec.id);  setActed('modified'); };
 
     const handleRejectConfirm = () => {
         if (rejectReason.trim().length < 10) return;
@@ -60,36 +53,47 @@ function RecommendationItem({
         reroute:             '↩',
     };
 
-    // ─── NEW: Extract detection data if available ─────────────────────────
-    const detectionData = rec.metadata?.detectionData;
+    const detectionData    = rec.metadata?.detectionData;
     const hasDetectionData = detectionData && (detectionData.vehicleCount || detectionData.timeWindow);
 
     return (
         <div
             onClick={isActive ? undefined : onActivate}
             style={{
-                padding:      isActive ? '10px 12px' : '8px 12px',
-                background:   isActive ? 'rgba(59,158,255,0.06)' : 'transparent',
-                border:       `1px solid ${isActive ? 'rgba(59,158,255,0.2)' : 'transparent'}`,
-                borderRadius: 8,
+                /*
+                 * Active items get slightly more vertical padding to breathe;
+                 * inactive items stay compact to maximise list density.
+                 * Horizontal padding is uniform so content columns align.
+                 */
+                padding:      isActive ? '12px 14px' : '10px 14px',
+                background:   isActive ? 'rgba(59,158,255,0.07)' : 'transparent',
+                border:       `1px solid ${isActive ? 'rgba(59,158,255,0.22)' : 'transparent'}`,
+                borderRadius: 10,
                 cursor:       isActive ? 'default' : 'pointer',
                 transition:   'all 180ms ease',
+                marginBottom: isActive ? 0 : 2,
             }}
         >
-            {/* Top row */}
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: isActive ? 6 : 3 }}>
-        <span style={{ fontSize: '0.85rem', lineHeight: 1, flexShrink: 0, marginTop: 1 }}>
-          {INTERVENTION_ICONS[rec.interventionType] ?? '⚡'}
-        </span>
+            {/* Top row — icon + title + confidence badge */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: isActive ? 8 : 4 }}>
+                <span style={{ fontSize: '0.9rem', lineHeight: 1, flexShrink: 0, marginTop: 2 }}>
+                    {INTERVENTION_ICONS[rec.interventionType] ?? '⚡'}
+                </span>
+
                 <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{
-                        fontFamily:  'var(--font-display)',
-                        fontSize:    '0.7rem',
-                        fontWeight:  600,
-                        color:       'var(--text-primary)',
-                        lineHeight:  1.3,
-                        overflow:    'hidden',
-                        display:     '-webkit-box',
+                        fontFamily:      'var(--font-display)',
+                        /*
+                         * clamp(min, preferred, max) — scales the title between
+                         * a readable floor on compact screens and a comfortable
+                         * ceiling on 80–120 inch wall displays.
+                         */
+                        fontSize:        'clamp(0.72rem, 0.9vw, 0.85rem)',
+                        fontWeight:      600,
+                        color:           'var(--text-primary)',
+                        lineHeight:      1.35,
+                        overflow:        'hidden',
+                        display:         '-webkit-box',
                         WebkitLineClamp: isActive ? 2 : 1,
                         WebkitBoxOrient: 'vertical',
                     }}>
@@ -97,74 +101,70 @@ function RecommendationItem({
                     </div>
                 </div>
 
-                {/* Confidence - Always visible */}
+                {/* Confidence badge — always visible for rapid triage */}
                 <div style={{
                     display:      'flex',
                     alignItems:   'center',
-                    gap:          3,
-                    padding:      '2px 5px',
+                    gap:          4,
+                    padding:      '3px 7px',
                     background:   `${confColor}15`,
                     border:       `1px solid ${confColor}30`,
-                    borderRadius: 3,
+                    borderRadius: 4,
                     flexShrink:   0,
                 }}>
                     <div style={{
-                        width:        4,
-                        height:       4,
-                        borderRadius: '50%',
-                        background:   confColor,
+                        width: 5, height: 5, borderRadius: '50%', background: confColor,
                     }} />
                     <span style={{
                         fontFamily: 'var(--font-mono)',
-                        fontSize:   '0.52rem',
+                        fontSize:   'clamp(0.58rem, 0.72vw, 0.68rem)',
                         color:      confColor,
                     }}>
-            {rec.confidence}%
-          </span>
+                        {rec.confidence}%
+                    </span>
                 </div>
             </div>
 
-            {/* Expanded detail */}
+            {/* ── Expanded detail — only rendered for the active item ── */}
             {isActive && (
                 <div style={{ animation: 'fade-in 200ms ease' }}>
+
+                    {/* Description */}
                     <p style={{
-                        fontFamily:   'var(--font-mono)',
-                        fontSize:     '0.62rem',
-                        color:        'var(--text-muted)',
-                        lineHeight:   1.5,
-                        margin:       '0 0 10px',
+                        fontFamily: 'var(--font-mono)',
+                        fontSize:   'clamp(0.65rem, 0.82vw, 0.75rem)',
+                        color:      'var(--text-muted)',
+                        lineHeight: 1.6,
+                        margin:     '0 0 12px',
                     }}>
                         {rec.description}
                     </p>
 
-                    {/* ─── NEW: Detection "Why" section ───────────────────────── */}
+                    {/* "Why this recommendation" — detection context */}
                     {hasDetectionData && (
                         <div style={{
-                            marginBottom: 10,
-                            padding:      '6px 8px',
+                            marginBottom: 12,
+                            padding:      '8px 10px',
                             background:   'rgba(59,158,255,0.08)',
-                            border:       '1px solid rgba(59,158,255,0.15)',
-                            borderRadius: 6,
+                            border:       '1px solid rgba(59,158,255,0.16)',
+                            borderRadius: 7,
                             fontFamily:   'var(--font-mono)',
                         }}>
                             <div style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 4,
-                                marginBottom: 4,
+                                display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6,
                             }}>
                                 <span style={{
-                                    fontSize: '0.55rem',
-                                    fontWeight: 600,
-                                    letterSpacing: '0.06em',
+                                    fontSize:      'clamp(0.58rem, 0.72vw, 0.68rem)',
+                                    fontWeight:    700,
+                                    letterSpacing: '0.07em',
                                     textTransform: 'uppercase',
-                                    color: 'var(--accent-primary)',
+                                    color:         'var(--accent-primary)',
                                 }}>
-                                    WHY THIS RECOMMENDATION
+                                    Why this recommendation
                                 </span>
                                 <span style={{
-                                    fontSize: '0.5rem',
-                                    color: 'var(--text-muted)',
+                                    fontSize:  'clamp(0.56rem, 0.68vw, 0.64rem)',
+                                    color:     'var(--text-muted)',
                                     marginLeft: 'auto',
                                 }}>
                                     detection
@@ -172,74 +172,66 @@ function RecommendationItem({
                             </div>
 
                             <div style={{
-                                display: 'flex',
-                                alignItems: 'baseline',
-                                gap: 4,
-                                flexWrap: 'wrap',
+                                display: 'flex', alignItems: 'baseline', gap: 5, flexWrap: 'wrap',
                             }}>
                                 <span style={{
-                                    fontSize: '0.7rem',
+                                    fontSize:   'clamp(0.72rem, 0.9vw, 0.82rem)',
                                     fontWeight: 600,
-                                    color: 'var(--text-primary)',
+                                    color:      'var(--text-primary)',
                                 }}>
                                     {detectionData.vehicleCount} vehicles
                                 </span>
                                 <span style={{
-                                    fontSize: '0.55rem',
-                                    color: 'var(--text-muted)',
+                                    fontSize: 'clamp(0.58rem, 0.72vw, 0.68rem)',
+                                    color:    'var(--text-muted)',
                                 }}>
                                     detected in
                                 </span>
                                 <span style={{
-                                    fontSize: '0.7rem',
+                                    fontSize:   'clamp(0.72rem, 0.9vw, 0.82rem)',
                                     fontWeight: 600,
-                                    color: 'var(--accent-primary)',
+                                    color:      'var(--accent-primary)',
                                 }}>
                                     {detectionData.timeWindow}
                                 </span>
                             </div>
 
-                            {/* ─── NEW: Mini confidence meter ────────────────────── */}
+                            {/* Confidence meter bar */}
                             <div style={{
-                                marginTop: 6,
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 6,
+                                marginTop: 7, display: 'flex', alignItems: 'center', gap: 8,
                             }}>
                                 <div style={{
-                                    flex: 1,
-                                    height: 3,
-                                    background: 'rgba(255,255,255,0.1)',
-                                    borderRadius: 2,
-                                    overflow: 'hidden',
+                                    flex: 1, height: 3,
+                                    background:   'rgba(255,255,255,0.1)',
+                                    borderRadius: 2, overflow: 'hidden',
                                 }}>
                                     <div style={{
-                                        width: `${rec.confidence}%`,
-                                        height: '100%',
-                                        background: confColor,
+                                        width:        `${rec.confidence}%`,
+                                        height:       '100%',
+                                        background:   confColor,
                                         borderRadius: 2,
-                                        transition: 'width 300ms ease',
+                                        transition:   'width 300ms ease',
                                     }} />
                                 </div>
                                 <span style={{
                                     fontFamily: 'var(--font-mono)',
-                                    fontSize: '0.55rem',
-                                    color: confColor,
+                                    fontSize:   'clamp(0.58rem, 0.72vw, 0.68rem)',
+                                    color:      confColor,
                                 }}>
                                     {rec.confidence}% confidence
                                 </span>
                             </div>
 
-                            {/* Additional detection metadata if available */}
+                            {/* Additional detection metadata */}
                             {detectionData.averageSpeed && (
                                 <div style={{
-                                    marginTop: 6,
-                                    display: 'flex',
-                                    gap: 8,
-                                    fontSize: '0.55rem',
-                                    color: 'var(--text-muted)',
-                                    borderTop: '1px solid rgba(255,255,255,0.05)',
-                                    paddingTop: 6,
+                                    marginTop:    7,
+                                    display:      'flex',
+                                    gap:          10,
+                                    fontSize:     'clamp(0.58rem, 0.72vw, 0.68rem)',
+                                    color:        'var(--text-muted)',
+                                    borderTop:    '1px solid rgba(255,255,255,0.06)',
+                                    paddingTop:   7,
                                 }}>
                                     <span>⚡ Avg speed: {detectionData.averageSpeed} mph</span>
                                     {detectionData.congestionLevel && (
@@ -250,71 +242,73 @@ function RecommendationItem({
                         </div>
                     )}
 
-                    {/* Impact metrics */}
-                    <div style={{
-                        display:             'grid',
-                        gridTemplateColumns: '1fr 1fr 1fr',
-                        gap:                 6,
-                        marginBottom:        10,
-                    }}>
-                        <ImpactCell
-                            label="Congestion ↓"
-                            value={`−${rec.expectedImpact.congestionReduction}%`}
-                            color="var(--status-online)"
-                        />
-                        {rec.expectedImpact.travelTimeSavedMinutes && (
+                    {/* Impact metrics grid */}
+                    {rec.expectedImpact && (
+                        <div style={{
+                            display:             'grid',
+                            gridTemplateColumns: '1fr 1fr 1fr',
+                            gap:                 7,
+                            marginBottom:        12,
+                        }}>
                             <ImpactCell
-                                label="Travel time"
-                                value={`−${rec.expectedImpact.travelTimeSavedMinutes}m`}
-                                color="var(--accent-primary)"
+                                label="Congestion ↓"
+                                value={`−${rec.expectedImpact.congestionReduction ?? 0}%`}
+                                color="var(--status-online)"
                             />
-                        )}
-                        {rec.expectedImpact.fuelSavingsLiters && (
-                            <ImpactCell
-                                label="Fuel saved"
-                                value={`${rec.expectedImpact.fuelSavingsLiters}L`}
-                                color="var(--severity-info)"
-                            />
-                        )}
-                    </div>
+                            {rec.expectedImpact.travelTimeSavedMinutes && (
+                                <ImpactCell
+                                    label="Travel time"
+                                    value={`−${rec.expectedImpact.travelTimeSavedMinutes}m`}
+                                    color="var(--accent-primary)"
+                                />
+                            )}
+                            {rec.expectedImpact.fuelSavingsLiters && (
+                                <ImpactCell
+                                    label="Fuel saved"
+                                    value={`${rec.expectedImpact.fuelSavingsLiters}L`}
+                                    color="var(--severity-info)"
+                                />
+                            )}
+                        </div>
+                    )}
 
-                    {/* Expires */}
+                    {/* Expiry / generated timestamps */}
                     <div style={{
-                        fontFamily:   'var(--font-mono)',
-                        fontSize:     '0.55rem',
-                        color:        'var(--text-disabled)',
-                        marginBottom: 10,
-                        letterSpacing:'0.06em',
+                        fontFamily:    'var(--font-mono)',
+                        fontSize:      'clamp(0.58rem, 0.72vw, 0.68rem)',
+                        color:         'var(--text-disabled)',
+                        marginBottom:  12,
+                        letterSpacing: '0.06em',
                     }}>
                         Expires {formatRelativeTime(rec.expiresAt)} · Generated {formatRelativeTime(rec.generatedAt)}
                     </div>
 
-                    {/* Action result */}
+                    {/* Action result banner */}
                     {acted && (
                         <div style={{
-                            padding:      '6px 10px',
+                            padding:      '8px 12px',
                             background:   acted === 'approved' ? 'rgba(34,197,94,0.1)' : acted === 'rejected' ? 'rgba(255,59,59,0.1)' : 'rgba(59,158,255,0.1)',
                             border:       `1px solid ${acted === 'approved' ? 'rgba(34,197,94,0.3)' : acted === 'rejected' ? 'rgba(255,59,59,0.3)' : 'rgba(59,158,255,0.3)'}`,
-                            borderRadius: 6,
+                            borderRadius: 7,
                             fontFamily:   'var(--font-mono)',
-                            fontSize:     '0.62rem',
+                            fontSize:     'clamp(0.65rem, 0.82vw, 0.75rem)',
                             color:        acted === 'approved' ? 'var(--status-online)' : acted === 'rejected' ? 'var(--severity-critical)' : 'var(--accent-primary)',
                             animation:    'slide-in-up 200ms ease',
-                            marginBottom: 8,
+                            marginBottom: 10,
                         }}>
                             ✓ {acted.toUpperCase()} — logged to audit trail
                         </div>
                     )}
 
-                    {/* Reject reason box */}
+                    {/* Reject reason textarea */}
                     {showRejectBox && !acted && (
-                        <div style={{ marginBottom: 8, animation: 'slide-in-up 180ms ease' }}>
+                        <div style={{ marginBottom: 10, animation: 'slide-in-up 180ms ease' }}>
                             <div style={{
                                 fontFamily:    'var(--font-mono)',
-                                fontSize:      '0.55rem',
+                                fontSize:      'clamp(0.58rem, 0.72vw, 0.68rem)',
                                 letterSpacing: '0.1em',
                                 color:         'var(--text-muted)',
-                                marginBottom:  4,
+                                marginBottom:  5,
                                 textTransform: 'uppercase',
                             }}>
                                 Rejection reason (required)
@@ -327,35 +321,35 @@ function RecommendationItem({
                                 autoFocus
                                 style={{
                                     width:        '100%',
-                                    padding:      '7px 9px',
+                                    padding:      '9px 12px',
                                     background:   'var(--bg-elevated)',
                                     border:       `1px solid ${rejectReason.length > 0 && rejectReason.length < 10
                                         ? 'var(--severity-high)'
                                         : 'var(--border-default)'
                                     }`,
-                                    borderRadius: 5,
+                                    borderRadius: 6,
                                     color:        'var(--text-primary)',
                                     fontFamily:   'var(--font-mono)',
-                                    fontSize:     '0.65rem',
+                                    fontSize:     'clamp(0.65rem, 0.82vw, 0.75rem)',
                                     resize:       'none',
                                     outline:      'none',
                                     boxSizing:    'border-box',
-                                    lineHeight:   1.4,
+                                    lineHeight:   1.5,
                                 }}
                             />
-                            <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                            <div style={{ display: 'flex', gap: 6, marginTop: 7 }}>
                                 <button
                                     onClick={handleRejectConfirm}
                                     disabled={rejectReason.trim().length < 10}
                                     style={{
                                         flex:          1,
-                                        padding:       '5px',
+                                        padding:       '7px',
                                         background:    rejectReason.trim().length >= 10 ? 'rgba(255,59,59,0.15)' : 'transparent',
                                         border:        '1px solid rgba(255,59,59,0.3)',
-                                        borderRadius:  5,
+                                        borderRadius:  6,
                                         cursor:        rejectReason.trim().length >= 10 ? 'pointer' : 'not-allowed',
                                         fontFamily:    'var(--font-mono)',
-                                        fontSize:      '0.6rem',
+                                        fontSize:      'clamp(0.62rem, 0.78vw, 0.72rem)',
                                         color:         rejectReason.trim().length >= 10 ? 'var(--severity-critical)' : 'var(--text-disabled)',
                                         outline:       'none',
                                         transition:    'all 150ms ease',
@@ -366,15 +360,15 @@ function RecommendationItem({
                                 <button
                                     onClick={() => setShowRejectBox(false)}
                                     style={{
-                                        padding:    '5px 10px',
-                                        background: 'transparent',
-                                        border:     '1px solid var(--border-default)',
-                                        borderRadius: 5,
-                                        cursor:     'pointer',
-                                        fontFamily: 'var(--font-mono)',
-                                        fontSize:   '0.6rem',
-                                        color:      'var(--text-muted)',
-                                        outline:    'none',
+                                        padding:      '7px 12px',
+                                        background:   'transparent',
+                                        border:       '1px solid var(--border-default)',
+                                        borderRadius: 6,
+                                        cursor:       'pointer',
+                                        fontFamily:   'var(--font-mono)',
+                                        fontSize:     'clamp(0.62rem, 0.78vw, 0.72rem)',
+                                        color:        'var(--text-muted)',
+                                        outline:      'none',
                                     }}
                                 >
                                     Cancel
@@ -385,7 +379,7 @@ function RecommendationItem({
 
                     {/* Action buttons */}
                     {!acted && !showRejectBox && (
-                        <div style={{ display: 'flex', gap: 5 }}>
+                        <div style={{ display: 'flex', gap: 6 }}>
                             {hasPermission('approve_signal') && (
                                 <RecBtn label="Approve" color="var(--status-online)" onClick={handleApprove} primary />
                             )}
@@ -403,29 +397,31 @@ function RecommendationItem({
     );
 }
 
+// ── Impact cell ────────────────────────────────────────────────────────────────
 function ImpactCell({ label, value, color }: { label: string; value: string; color: string }) {
     return (
         <div style={{
-            padding:      '5px 7px',
+            padding:      '8px 10px',
             background:   'var(--bg-elevated)',
-            borderRadius: 5,
+            borderRadius: 6,
             border:       '1px solid var(--border-subtle)',
             textAlign:    'center',
         }}>
+            {/* Value is the primary data point — larger, coloured */}
             <div style={{
-                fontFamily:  'var(--font-mono)',
-                fontSize:    '0.75rem',
-                fontWeight:  600,
+                fontFamily:   'var(--font-mono)',
+                fontSize:     'clamp(0.78rem, 1vw, 0.9rem)',
+                fontWeight:   700,
                 color,
-                lineHeight:  1,
-                marginBottom: 2,
+                lineHeight:   1,
+                marginBottom: 3,
             }}>
                 {value}
             </div>
             <div style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize:   '0.5rem',
-                color:      'var(--text-muted)',
+                fontFamily:    'var(--font-mono)',
+                fontSize:      'clamp(0.54rem, 0.68vw, 0.64rem)',
+                color:         'var(--text-muted)',
                 letterSpacing: '0.06em',
             }}>
                 {label}
@@ -434,9 +430,10 @@ function ImpactCell({ label, value, color }: { label: string; value: string; col
     );
 }
 
+// ── Action button ──────────────────────────────────────────────────────────────
 function RecBtn({
-                    label, color, onClick, primary,
-                }: {
+    label, color, onClick, primary,
+}: {
     label: string; color: string; onClick: () => void; primary?: boolean;
 }) {
     return (
@@ -444,13 +441,17 @@ function RecBtn({
             onClick={onClick}
             style={{
                 flex:          primary ? 1.4 : 1,
-                padding:       '5px 8px',
+                /*
+                 * Increased vertical padding (7px vs original 5px) so tap
+                 * targets are comfortable on touch-enabled operator consoles.
+                 */
+                padding:       '7px 10px',
                 background:    primary ? `${color}18` : 'rgba(255,255,255,0.04)',
                 border:        `1px solid ${primary ? `${color}40` : 'rgba(255,255,255,0.08)'}`,
-                borderRadius:  5,
+                borderRadius:  6,
                 cursor:        'pointer',
                 fontFamily:    'var(--font-mono)',
-                fontSize:      '0.6rem',
+                fontSize:      'clamp(0.62rem, 0.78vw, 0.72rem)',
                 fontWeight:    600,
                 color:         primary ? color : 'var(--text-secondary)',
                 letterSpacing: '0.05em',
@@ -463,15 +464,15 @@ function RecBtn({
     );
 }
 
-// ── Main card ─────────────────────────────
+// ── Main card ──────────────────────────────────────────────────────────────────
 export function AIRecommendationCard({
-                                         recommendations,
-                                         onApprove,
-                                         onReject,
-                                         onModify,
-                                     }: AIRecommendationCardProps) {
-    const [isCollapsed, setIsCollapsed]   = useState(false);
-    const [activeIndex, setActiveIndex]   = useState(0);
+    recommendations,
+    onApprove,
+    onReject,
+    onModify,
+}: AIRecommendationCardProps) {
+    const [isCollapsed, setIsCollapsed] = useState(false);
+    const [activeIndex, setActiveIndex] = useState(0);
 
     if (recommendations.length === 0) return null;
 
@@ -479,35 +480,40 @@ export function AIRecommendationCard({
 
     return (
         <div style={{
-            position:     'absolute',
-            bottom:       12,
-            left:         12,
-            zIndex:       500,
-            width:        300,
-            background:   'rgba(12,17,23,0.96)',
-            border:       '1px solid rgba(59,158,255,0.2)',
-            borderRadius: 10,
-            backdropFilter: 'blur(16px)',
-            boxShadow:    '0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(59,158,255,0.05)',
-            overflow:     'hidden',
-            animation:    'slide-in-up 300ms ease',
+            position:   'absolute',
+            bottom:     16,
+            left:       16,
+            zIndex:     500,
+            /*
+             * Width scales with viewport so the card remains proportional
+             * on 80–120 inch displays without overflowing small screens.
+             */
+            width:          'clamp(300px, 22vw, 390px)',
+            maxWidth:       'calc(100% - 32px)',
+            background:     'rgba(12,17,23,0.97)',
+            border:         '1px solid rgba(59,158,255,0.22)',
+            borderRadius:   12,
+            backdropFilter: 'blur(18px)',
+            boxShadow:      '0 10px 40px rgba(0,0,0,0.55), 0 0 0 1px rgba(59,158,255,0.06)',
+            overflow:       'hidden',
+            animation:      'slide-in-up 300ms ease',
         }}>
 
-            {/* Header */}
+            {/* Header — click to collapse/expand */}
             <div
                 onClick={() => setIsCollapsed(p => !p)}
                 style={{
-                    display:        'flex',
-                    alignItems:     'center',
-                    gap:            8,
-                    padding:        '9px 12px',
-                    borderBottom:   isCollapsed ? 'none' : '1px solid rgba(255,255,255,0.06)',
-                    cursor:         'pointer',
-                    userSelect:     'none',
+                    display:      'flex',
+                    alignItems:   'center',
+                    gap:          10,
+                    padding:      '12px 16px',
+                    borderBottom: isCollapsed ? 'none' : '1px solid rgba(255,255,255,0.07)',
+                    cursor:       'pointer',
+                    userSelect:   'none',
                 }}
             >
-                {/* AI pulse icon */}
-                <div style={{ position: 'relative', width: 16, height: 16, flexShrink: 0 }}>
+                {/* Animated AI pulse indicator */}
+                <div style={{ position: 'relative', width: 18, height: 18, flexShrink: 0 }}>
                     <div style={{
                         position:     'absolute',
                         inset:        0,
@@ -518,7 +524,7 @@ export function AIRecommendationCard({
                     }} />
                     <div style={{
                         position:     'absolute',
-                        inset:        4,
+                        inset:        5,
                         borderRadius: '50%',
                         background:   'var(--accent-primary)',
                     }} />
@@ -526,43 +532,43 @@ export function AIRecommendationCard({
 
                 <span style={{
                     fontFamily:    'var(--font-display)',
-                    fontSize:      '0.68rem',
+                    fontSize:      'clamp(0.72rem, 0.9vw, 0.82rem)',
                     fontWeight:    700,
                     letterSpacing: '0.06em',
                     textTransform: 'uppercase',
                     color:         'var(--text-primary)',
                     flex:          1,
                 }}>
-          AI Recommendations
-        </span>
+                    AI Recommendations
+                </span>
 
                 {/* Count badge */}
                 <span style={{
                     fontFamily:    'var(--font-mono)',
-                    fontSize:      '0.58rem',
-                    padding:       '1px 6px',
+                    fontSize:      'clamp(0.6rem, 0.75vw, 0.7rem)',
+                    padding:       '2px 8px',
                     background:    'rgba(59,158,255,0.15)',
                     border:        '1px solid rgba(59,158,255,0.3)',
                     borderRadius:  10,
                     color:         'var(--accent-primary)',
                 }}>
-          {top3.length}
-        </span>
+                    {top3.length}
+                </span>
 
                 {/* Collapse chevron */}
                 <span style={{
-                    fontSize:    '0.6rem',
-                    color:       'var(--text-muted)',
-                    transform:   isCollapsed ? 'rotate(180deg)' : 'none',
-                    transition:  'transform 200ms ease',
+                    fontSize:   '0.65rem',
+                    color:      'var(--text-muted)',
+                    transform:  isCollapsed ? 'rotate(180deg)' : 'none',
+                    transition: 'transform 200ms ease',
                 }}>
-          ▲
-        </span>
+                    ▲
+                </span>
             </div>
 
             {/* Body */}
             {!isCollapsed && (
-                <div style={{ padding: '6px 8px 8px' }}>
+                <div style={{ padding: '10px 12px 12px' }}>
                     {top3.map((rec, i) => (
                         <RecommendationItem
                             key={rec.id}

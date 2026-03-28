@@ -1,0 +1,25 @@
+# Node.js
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# dotenv environment variables
+.env
+
+# Logs
+logs
+*.log
+logs/*.log
+
+# Prisma
+prisma/dev.db
+prisma/dev.db-journal
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+
+# This was inserted by `prisma init`:
+[object Promise]

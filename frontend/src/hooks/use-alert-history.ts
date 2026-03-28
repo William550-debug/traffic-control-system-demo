@@ -307,7 +307,7 @@ export function useAlertHistory({
         } catch (err) {
             if ((err as Error).name === "AbortError") return;
 
-            // Silent fallback to mock data — same pattern as use-alerts.ts
+            // Silent fallback to mock data — same pattern as use-alertRouter.ts
             console.warn("[use-alert-history] API unavailable, using mock data");
             const mock = buildMockHistory();
             dispatch({ type: "FETCH_SUCCESS", payload: mock });
