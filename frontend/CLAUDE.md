@@ -60,7 +60,7 @@ Components use **inline styles** throughout (not Tailwind classes) for precise c
 
 ### Type system
 
-All domain types are in `src/types/index.ts`. The key union types to know: `Severity`, `AlertType`, `AlertStatus`, `WsEventType`, `UserRole`, `Permission`, `Agency`. Custom Leaflet type declarations are in `src/types/leaflet.d.ts` and `src/types/Leaflet.heat.d.ts`.
+All domain types are in `src/types/backend-index.ts`. The key union types to know: `Severity`, `AlertType`, `AlertStatus`, `WsEventType`, `UserRole`, `Permission`, `Agency`. Custom Leaflet type declarations are in `src/types/leaflet.d.ts` and `src/types/Leaflet.heat.d.ts`.
 
 ### Path aliases
 

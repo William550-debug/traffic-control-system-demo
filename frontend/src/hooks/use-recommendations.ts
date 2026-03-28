@@ -14,19 +14,24 @@ interface RecommendationsState {
     modify:          (id: string) => void;
 }
 
-async function patchRecommendation(
-    id: string,
-    action: 'approve' | 'reject' | 'modify',
-    reason?: string,
+// ── API helpers ───────────────────────────────────────────────────────────────
+// Backend endpoints:
+//   Approve → POST /api/recommendations/:id/approve
+//   Reject  → POST /api/recommendations/:id/reject  { reason }
+//   Modify  → UI-only (opens form) — no backend call
+
+async function postRecommendationAction(
+    path:  string,
+    body?: object,
 ): Promise<void> {
     try {
-        await fetch('/api/recommendations', {
-            method:  'PATCH',
+        await fetch(path, {
+            method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ id, action, reason }),
+            body:    body ? JSON.stringify(body) : undefined,
         });
     } catch {
-        // Apply locally regardless
+        // Optimistic update already applied — safe to ignore
     }
 }
 
@@ -34,50 +39,66 @@ export function useRecommendations(): RecommendationsState {
     const [recommendations, setRecommendations] = useState<Recommendation[]>(MOCK_RECOMMENDATIONS);
     const [isLoading, setIsLoading]             = useState(false);
 
-    // ── Fetch on mount ──────────────────────
+    // ── Fetch on mount ────────────────────────────────────────────────────────
+    // Backend returns { ok: true, data: Recommendation[] } — unwrap accordingly.
+    // Falls back to MOCK_RECOMMENDATIONS if unreachable.
     useEffect(() => {
         setIsLoading(true);
         fetch('/api/recommendations')
             .then(r => r.json())
-            .then((data: Recommendation[]) => {
-                if (Array.isArray(data) && data.length > 0) setRecommendations(data.map(reviveRecommendation));
+            .then((json: unknown) => {
+                const data = Array.isArray(json)
+                    ? json
+                    : (json as { ok?: boolean; data?: Recommendation[] }).data;
+
+                if (Array.isArray(data) && data.length > 0) {
+                    setRecommendations(data.map(reviveRecommendation));
+                }
             })
             .catch(() => { /* keep mock */ })
             .finally(() => setIsLoading(false));
     }, []);
 
-    // ── WebSocket new recommendations ───────
+    // ── WebSocket — new / updated recommendations ─────────────────────────────
     useWsEvent<Recommendation>('recommendation:new', useCallback((event) => {
         const rec = reviveRecommendation(event.payload);
         setRecommendations(prev => {
-            if (prev.some(r => r.id === rec.id)) return prev;
-            return [rec, ...prev];
+            // Upsert: update if exists, prepend if new
+            const exists = prev.some(r => r.id === rec.id);
+            return exists
+                ? prev.map(r => r.id === rec.id ? { ...r, ...rec } : r)
+                : [rec, ...prev];
         });
     }, []));
 
-    // ── Actions ──────────────────────────────
+    // ── Actions ───────────────────────────────────────────────────────────────
+
     const approve = useCallback((id: string) => {
-        void patchRecommendation(id, 'approve');
+        // Optimistic update first — UI stays responsive
         setRecommendations(prev => prev.map(r =>
-            r.id === id ? { ...r, status: 'approved', approvedAt: new Date() } : r
+            r.id === id ? { ...r, status: 'approved', approvedAt: new Date() } : r,
         ));
+        void postRecommendationAction(`/api/recommendations/${id}/approve`);
     }, []);
 
     const reject = useCallback((id: string, reason: string) => {
-        void patchRecommendation(id, 'reject', reason);
         setRecommendations(prev => prev.map(r =>
-            r.id === id ? { ...r, status: 'rejected', rejectionReason: reason } : r
+            r.id === id ? { ...r, status: 'rejected', rejectionReason: reason } : r,
         ));
+        void postRecommendationAction(`/api/recommendations/${id}/reject`, { reason });
     }, []);
 
+    // modify is UI-only — opens a modification form. The recommendation stays
+    // 'pending' until the operator submits the modified version, at which point
+    // approve() is called with the adjusted rec. No backend call here.
     const modify = useCallback((id: string) => {
-        void patchRecommendation(id, 'modify');
         setRecommendations(prev => prev.map(r =>
-            r.id === id ? { ...r, status: 'modified' } : r
+            r.id === id ? { ...r, status: 'modified' } : r,
         ));
     }, []);
 
     return {
+        // Only surface pending recs — approved/rejected are archived
         recommendations: recommendations.filter(r => r.status === 'pending'),
         isLoading,
         approve,

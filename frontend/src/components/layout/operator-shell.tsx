@@ -62,33 +62,25 @@ function useContainerSize(ref: React.RefObject<HTMLDivElement | null>) {
 // ─── Shell ────────────────────────────────────────────────────────────────────
 
 export function OperatorShell() {
+
+    //Hooks are at the top
+
+    const {user} = useAuth()
+    const mapStageRef = useRef<HTMLDivElement>(null);
+    const mapSize = useContainerSize(mapStageRef)
+
     const [isEmergency,    setIsEmergency]    = useState(false);
     const [drawerAlert,    setDrawerAlert]    = useState<Alert | null>(null);
     const [focusedAlertId, setFocusedAlertId] = useState<string | undefined>();
 
-    // Ref is placed on the MAP STAGE div only — not the grid root.
-    // This ensures ResizeObserver measures only the drawable map area,
-    // never including the StatusBar height.
-    const mapStageRef = useRef<HTMLDivElement>(null);
-    const mapSize     = useContainerSize(mapStageRef);
 
-    const { user } = useAuth();
+    //use alerts provides the logic we will trap them in the handlers for auditing
+    const {alerts, pendingActions, isLoading , onApprove , onIgnore , onEscalate, onDispatch , onApproveAll} = useAlerts()
 
-    const {
-        alerts, pendingActions,
-        acknowledgeAlert, ignoreAlert, escalateAlert, dispatchAlert,
-    } = useAlerts();
-
-    const handleClaimOptimistic   = useCallback((_id: string, _agency: Agency) => {}, []);
-    const handleReleaseOptimistic = useCallback((_id: string) => {}, []);
-
-    const { claimAlert, releaseAlert, isClaiming, isReleasing } =
-        useAlertClaim(handleClaimOptimistic, handleReleaseOptimistic);
+    const { logAction} = useAuditLog();
 
     const { recommendations, approve: approveRec, reject: rejectRec, modify: modifyRec } =
         useRecommendations();
-
-    const { logAction } = useAuditLog();
 
     const {
         corridors, selectedCorridor, selectCorridor,
@@ -99,6 +91,23 @@ export function OperatorShell() {
         vehicles, flaggedVehicles, newFlag,
         dismissFlag, congestedRoads, mapStats,
     } = useMapIntelligence();
+
+
+    // Optimistic handlers for useAlertClaim
+    const handleClaimOptimistic   = useCallback(() => {}, []);
+    const handleReleaseOptimistic = useCallback(() => {}, []);
+
+
+    // Ref is placed on the MAP STAGE div only — not the grid root.
+    // This ensures ResizeObserver measures only the drawable map area,
+    // never including the StatusBar height.
+
+
+    const { claimAlert, releaseAlert, isClaiming, isReleasing } =
+        useAlertClaim(handleClaimOptimistic, handleReleaseOptimistic);
+
+
+
 
     // ── Emergency ──
     const toggleEmergency = useCallback(() => {
@@ -123,37 +132,39 @@ export function OperatorShell() {
     }, []);
 
     const handleApprove = useCallback((id: string) => {
-        acknowledgeAlert(id);
+        onApprove(id); // Fixed: was acknowledgeAlert
         const a = alerts.find(x => x.id === id);
         if (user && a) logAction({ type: 'alert_approved', performedBy: user.name, agency: user.agency, targetId: id, targetLabel: a.title });
-    }, [acknowledgeAlert, alerts, user, logAction]);
+    }, [onApprove, alerts, user, logAction]);
+
 
     const handleIgnore = useCallback((id: string, reason?: string) => {
-        ignoreAlert(id, reason);
+        onIgnore(id, reason); // Fixed: was ignoreAlert
         const a = alerts.find(x => x.id === id);
         if (user && a) logAction({ type: 'alert_ignored', performedBy: user.name, agency: user.agency, targetId: id, targetLabel: a.title, details: reason ? { reason } : undefined });
         if (drawerAlert?.id === id) closeDrawer();
-    }, [ignoreAlert, alerts, user, logAction, drawerAlert, closeDrawer]);
+    }, [onIgnore, alerts, user, logAction, drawerAlert, closeDrawer]);
+
 
     const handleDispatch = useCallback((id: string) => {
-        dispatchAlert(id);
+        onDispatch(id); // Fixed: was dispatchAlert
         const a = alerts.find(x => x.id === id);
         if (user && a) logAction({ type: 'dispatch_sent', performedBy: user.name, agency: user.agency, targetId: id, targetLabel: a.title });
-    }, [dispatchAlert, alerts, user, logAction]);
+    }, [onDispatch, alerts, user, logAction]);
 
     const handleEscalate = useCallback((id: string) => {
-        escalateAlert(id);
+        onEscalate(id); // Fixed: was escalateAlert
         const a = alerts.find(x => x.id === id);
         if (user && a) logAction({ type: 'alert_escalated', performedBy: user.name, agency: user.agency, targetId: id, targetLabel: a.title });
-    }, [escalateAlert, alerts, user, logAction]);
+    }, [onEscalate, alerts, user, logAction]);
 
     const handleApproveAll = useCallback((ids: string[]) => {
+        onApproveAll(ids); // Fixed: maps directly to bulk action
         ids.forEach(id => {
-            acknowledgeAlert(id);
             const a = alerts.find(x => x.id === id);
             if (user && a) logAction({ type: 'alert_approved', performedBy: user.name, agency: user.agency, targetId: id, targetLabel: a.title, details: { bulk: true } });
         });
-    }, [acknowledgeAlert, alerts, user, logAction]);
+    }, [onApproveAll, alerts, user, logAction]);
 
     const handleApproveRec = useCallback((id: string) => {
         approveRec(id);

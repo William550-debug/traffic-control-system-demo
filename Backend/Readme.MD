@@ -66,7 +66,7 @@ export const GET  = proxyHandler('/api/alerts');
 export const POST = proxyHandler('/api/alerts');
 ```
 
-See `nextjs-api-routes.ts` for the full list of all route files and their proxy calls.
+See `api-routes-backend-index.ts` for the full list of all route files and their proxy calls.
 
 ### 4. Update WebSocket provider
 
@@ -166,18 +166,18 @@ In development, set `API_SECRET=` (empty string) in `.env` to skip auth.
 
 ```
 src/
-├── index.ts              ← Express app + HTTP server + WebSocket init
+├── backend-index.ts              ← Express app + HTTP server + WebSocket init
 ├── types/
-│   └── index.ts          ← All TypeScript types (mirrors frontend types/index.ts)
+│   └── backend-index.ts          ← All TypeScript types (mirrors frontend types/backend-index.ts)
 ├── data/
 │   └── store.ts          ← In-memory stores + seeded mock data
 ├── middleware/
-│   └── index.ts          ← CORS, auth, rate limiter, audit helper, error handler
+│   └── backend-index.ts          ← CORS, auth, rate limiter, audit helper, error handler
 ├── websocket/
 │   └── manager.ts        ← WebSocketServer wrapper + broadcast + dev simulation
 └── routes/
-    ├── alerts.ts          ← /api/alerts/**
-    ├── incidents.ts       ← /api/incidents/**
+    ├── alertRouter.ts          ← /api/alerts/**
+    ├── incidentRouter.ts       ← /api/incidents/**
     └── misc.ts            ← /api/corridors, /api/audit, /api/recommendations,
                               /api/health, /api/predictive
 ```

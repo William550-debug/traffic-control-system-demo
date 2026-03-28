@@ -35,7 +35,7 @@ src/
 │   ├── mock-data.ts
 │   └── utils.ts
 └── types/
-    └── index.ts
+    └── backend-index.ts
 ```
 
 ## 3. Update tailwind.config.ts

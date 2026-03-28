@@ -2,16 +2,17 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useAuth, MOCK_USERS, ROLE_LABELS, AGENCY_LABELS, AGENCY_COLORS } from '@/providers/auth-provider';
-import type { User } from '@/types';
+import {
+    useAuth,
+    LOGIN_USERS, // Changed from MOCK_USERS
+    ROLE_LABELS,
+    AGENCY_LABELS,
+    AGENCY_COLORS
+} from '@/providers/auth-provider';
+import type { User , Agency} from '@/types';
 
-const MOCK_PINS: Record<string, string> = {
-    'traffic-01':    '1234',
-    'emergency-01':  '5678',
-    'supervisor-01': '0000',
-};
 
-const USERS = Object.values(MOCK_USERS);
+const USERS = LOGIN_USERS;
 
 export default function LoginPage() {
     const router       = useRouter();
@@ -29,12 +30,11 @@ export default function LoginPage() {
         setMounted(true);
     }, []);
 
-    // Redirect once auth state is set
+    // Redirect logic
     useEffect(() => {
         if (!mounted) return;
         if (user) {
             const from = searchParams.get('from') ?? '/operator';
-            // Only allow redirecting to internal paths
             const safePath = from.startsWith('/') ? from : '/operator';
             router.replace(safePath);
         }
@@ -46,27 +46,33 @@ export default function LoginPage() {
         setError('');
     };
 
-    const handlePin = useCallback((digit: string) => {
-        if (pin.length >= 4) return;
-        const next = pin + digit;
-        setPin(next);
-        setError('');
+    // performLogin must be stabilized with useCallback to satisfy exhaustive-deps
+    const performLogin = useCallback(async (finalPin: string) => {
+        if (!selected) return;
 
-        if (next.length === 4) {
-            const correct = MOCK_PINS[selected!.id];
-            if (next === correct) {
-                setSuccess(true);
-                login(selected!.id);
-            } else {
-                setShake(true);
-                setTimeout(() => {
-                    setPin('');
-                    setError('Incorrect PIN. Try again.');
-                    setShake(false);
-                }, 600);
-            }
+        const isSuccess = await login(selected.id, finalPin);
+
+        if (isSuccess) {
+            setSuccess(true);
+        } else {
+            setShake(true);
+            setTimeout(() => {
+                setPin('');
+                setShake(false);
+            }, 600);
         }
-    }, [pin, selected, login]);
+    }, [selected, login]);
+
+    const handlePin = useCallback(async (digit: string) => {
+        if (pin.length >= 4 || success) return;
+
+        const nextPin = pin + digit;
+        setPin(nextPin);
+
+        if (nextPin.length === 4) {
+            void performLogin(nextPin);
+        }
+    }, [pin, success, performLogin]); // Added performLogin as a dependency
 
     const handleBackspace = () => {
         setPin(p => p.slice(0, -1));

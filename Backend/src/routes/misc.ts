@@ -1,241 +1,190 @@
+// ─── Corridors router ─────────────────────────────────────────────────────────
+
 import { Router, Request, Response } from 'express';
-import { v4 as uuid } from 'uuid';
 import { z } from 'zod';
-import { incidents } from '../data/store';
-import { addAudit, getOperator } from '../middleware';
-import { wsManager } from '../websocket/manager';
-import type { IncidentStatus, AIRecommendation, Responder, TimelineEvent } from '../types';
+import { corridors, auditLog, recommendations, systemHealth, predictiveData } from '../data/store.js';
+import { addAudit, getOperator } from '../middleware/index.js';
+import { wsManager } from '../websocket/manager.js';
 
-const router = Router();
+// ──────────────────────────────────────────────────────────────────────────────
+// CORRIDORS
+// ──────────────────────────────────────────────────────────────────────────────
 
-// ─── Helper: add timeline event ───────────────────────────────────────────────
+export const corridorsRouter = Router();
 
-function addTimeline(
-    id: string,
-    event: Omit<TimelineEvent, 'id' | 'time' | 'completed'> & { completed?: boolean }
-): void {
-    const inc = incidents.get(id);
-    if (!inc) return;
-    const evt: TimelineEvent = {
-        id:        uuid(),
-        time:      new Date(),
-        completed: event.completed ?? true,
-        label:     event.label,
-        type:      event.type,
-        detail:    event.detail,
-        actor:     event.actor,
-    };
-    inc.timeline.push(evt);
-}
+corridorsRouter.get('/', (_req: Request, res: Response) => {
+    res.json({ ok: true, data: Array.from(corridors.values()) });
+});
 
-// ─── GET /api/incidents ───────────────────────────────────────────────────────
+corridorsRouter.get('/:id', (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    const c = corridors.get(id);
+    if (!c) { res.status(404).json({ ok: false, error: 'Corridor not found' }); return; }
+    res.json({ ok: true, data: c });
+});
 
-router.get('/', (_req: Request, res: Response) => {
-    const list = Array.from(incidents.values()).sort(
-        (a, b) => b.detectedAt.getTime() - a.detectedAt.getTime()
+corridorsRouter.patch('/:id/timing', (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    const c = corridors.get(id);
+    if (!c) { res.status(404).json({ ok: false, error: 'Corridor not found' }); return; }
+
+    if (c.locked && c.lockedBy !== getOperator(req)) {
+        res.status(423).json({ ok: false, error: `Corridor locked by ${c.lockedBy}` }); return;
+    }
+
+    const TimingSchema = z.object({
+        greenDuration:  z.number().min(5).max(120),
+        redDuration:    z.number().min(5).max(120),
+        yellowDuration: z.number().min(2).max(10),
+        cycleLength:    z.number().min(20).max(240),
+    });
+
+    const parse = TimingSchema.safeParse(req.body);
+    if (!parse.success) { res.status(400).json({ ok: false, error: 'Invalid timing', details: parse.error.issues }); return; }
+
+    c.timing    = parse.data;
+    c.updatedAt = new Date();
+
+    addAudit({ type: 'signal_adjusted', performedBy: getOperator(req), agency: 'Traffic Ops', targetId: c.id, targetLabel: `${c.name} — signal timing updated` });
+    // Broadcast to all WS clients so useCorridor() updates live
+    wsManager.emit('corridor:updated', { id: c.id, timing: c.timing, updatedAt: c.updatedAt });
+    res.json({ ok: true, data: c });
+});
+
+corridorsRouter.post('/:id/lock', (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    const c = corridors.get(id);
+    if (!c) { res.status(404).json({ ok: false, error: 'Corridor not found' }); return; }
+
+    c.locked   = true;
+    c.lockedBy = getOperator(req);
+    wsManager.emit('corridor:updated', { id: c.id, locked: true, lockedBy: c.lockedBy });
+    res.json({ ok: true, data: c });
+});
+
+corridorsRouter.post('/:id/unlock', (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    const c = corridors.get(id);
+    if (!c) { res.status(404).json({ ok: false, error: 'Corridor not found' }); return; }
+
+    c.locked   = false;
+    delete c.lockedBy;
+    wsManager.emit('corridor:updated', { id: c.id, locked: false, lockedBy: null });
+    res.json({ ok: true, data: c });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// AUDIT
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const auditRouter = Router();
+
+auditRouter.get('/', (req: Request, res: Response) => {
+    const limitParam  = (req.query.limit as string) || '100';
+    const offsetParam = (req.query.offset as string) || '0';
+    const type        = req.query.type as string | undefined;
+    const operator    = req.query.operator as string | undefined;
+
+    let list = [...auditLog];
+
+    if (type)     list = list.filter(e => e.type === type);
+    if (operator) list = list.filter(e => e.performedBy === operator);
+
+    // 2. Parse strictly to resolve TS2554
+    const lim = Math.min(parseInt(limitParam, 10), 500);
+    const off = parseInt(offsetParam, 10);
+
+    res.json({
+        ok: true,
+        data: list.slice(off, off + lim),
+        total: list.length,
+        limit: lim,
+        offset: off,
+    });
+});
+
+auditRouter.post('/', (req: Request, res: Response) => {
+    const Schema = z.object({
+        type:        z.string(),
+        performedBy: z.string(),
+        agency:      z.string(),
+        targetId:    z.string(),
+        targetLabel: z.string(),
+        details:     z.record(z.string(), z.unknown()).optional()
+    });
+    const parse = Schema.safeParse(req.body);
+    if (!parse.success) { res.status(400).json({ ok: false, error: 'Validation failed', details: parse.error.issues }); return; }
+
+    const entry = addAudit(parse.data as Parameters<typeof addAudit>[0]);
+    res.status(201).json({ ok: true, data: entry });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// AI RECOMMENDATIONS
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const recommendationsRouter = Router();
+
+recommendationsRouter.get('/', (_req: Request, res: Response) => {
+    const list = Array.from(recommendations.values()).sort(
+        (a, b) => b.generatedAt.getTime() - a.generatedAt.getTime()
     );
-    res.json({ ok: true, data: list, total: list.length });
+    res.json({ ok: true, data: list });
 });
 
-// ─── GET /api/incidents/:id ───────────────────────────────────────────────────
-
-router.get('/:id', (req: Request, res: Response) => {
-    const inc = incidents.get(req.params.id);
-    if (!inc) { res.status(404).json({ ok: false, error: 'Incident not found' }); return; }
-    res.json({ ok: true, data: inc });
-});
-
-// ─── PATCH /api/incidents/:id/status ─────────────────────────────────────────
-
-router.patch('/:id/status', (req: Request, res: Response) => {
-    const inc = incidents.get(req.params.id);
-    if (!inc) { res.status(404).json({ ok: false, error: 'Incident not found' }); return; }
-
-    const { status } = z.object({
-        status: z.enum(['detected','confirmed','responding','resolving','cleared']),
-    }).parse(req.body);
-
-    const prev     = inc.status;
-    inc.status     = status as IncidentStatus;
-    inc.updatedAt  = new Date();
-
-    addTimeline(inc.id, { label: `Status changed to ${status}`, type: 'operator', actor: getOperator(req), detail: `From ${prev} → ${status}` });
-    wsManager.emit('incident:updated', inc);
-    res.json({ ok: true, data: inc });
-});
-
-// ─── POST /api/incidents/:id/confirm ─────────────────────────────────────────
-
-router.post('/:id/confirm', (req: Request, res: Response) => {
-    const inc = incidents.get(req.params.id);
-    if (!inc) { res.status(404).json({ ok: false, error: 'Incident not found' }); return; }
-
-    inc.status    = 'confirmed';
-    inc.updatedAt = new Date();
-
-    addTimeline(inc.id, { label: 'Incident confirmed by operator', type: 'operator', actor: getOperator(req), detail: 'Manual confirmation via dashboard' });
-    addAudit({ type: 'incident_confirmed', performedBy: getOperator(req), agency: 'Traffic Ops', targetId: inc.id, targetLabel: inc.name });
-    wsManager.emit('incident:updated', inc);
-    res.json({ ok: true, data: inc });
-});
-
-// ─── POST /api/incidents/:id/escalate ────────────────────────────────────────
-
-router.post('/:id/escalate', (req: Request, res: Response) => {
-    const inc = incidents.get(req.params.id);
-    if (!inc) { res.status(404).json({ ok: false, error: 'Incident not found' }); return; }
-
-    const { reason } = z.object({ reason: z.string().optional() }).parse(req.body ?? {});
-
-    inc.status    = 'responding';
-    inc.updatedAt = new Date();
-
-    addTimeline(inc.id, { label: 'Incident escalated', type: 'operator', actor: getOperator(req), detail: reason ?? 'Escalated to senior operator' });
-    wsManager.emit('incident:updated', inc);
-    res.json({ ok: true, data: inc });
-});
-
-// ─── POST /api/incidents/:id/resolve ─────────────────────────────────────────
-
-router.post('/:id/resolve', (req: Request, res: Response) => {
-    const inc = incidents.get(req.params.id);
-    if (!inc) { res.status(404).json({ ok: false, error: 'Incident not found' }); return; }
-
-    inc.status    = 'cleared';
-    inc.updatedAt = new Date();
-
-    // Mark all timeline events as completed
-    inc.timeline = inc.timeline.map(e => ({ ...e, completed: true }));
-
-    addTimeline(inc.id, { label: 'Incident resolved', type: 'operator', actor: getOperator(req), detail: 'Marked as cleared — traffic normalising' });
-    addAudit({ type: 'incident_resolved', performedBy: getOperator(req), agency: 'Traffic Ops', targetId: inc.id, targetLabel: inc.name });
-    wsManager.emit('incident:updated', inc);
-    res.json({ ok: true, data: inc });
-});
-
-// ─── POST /api/incidents/:id/recommendations/:recId/approve ──────────────────
-
-router.post('/:id/recommendations/:recId/approve', (req: Request, res: Response) => {
-    const inc = incidents.get(req.params.id);
-    if (!inc) { res.status(404).json({ ok: false, error: 'Incident not found' }); return; }
-
-    const rec = inc.recommendations.find(r => r.id === req.params.recId);
+recommendationsRouter.post('/:id/approve', (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    const rec = recommendations.get(id);
     if (!rec) { res.status(404).json({ ok: false, error: 'Recommendation not found' }); return; }
 
-    rec.status    = 'approved';
-    inc.updatedAt = new Date();
-
-    addTimeline(inc.id, { label: `AI recommendation approved: ${rec.action}`, type: 'operator', actor: getOperator(req) });
-    addAudit({ type: 'recommendation_approved', performedBy: getOperator(req), agency: 'Traffic Ops', targetId: rec.id, targetLabel: rec.action });
-    wsManager.emit('incident:updated', inc);
+    rec.status = 'approved';
+    addAudit({ type: 'ai_approved', performedBy: getOperator(req), agency: 'Traffic Ops', targetId: rec.id, targetLabel: rec.title });
+    wsManager.emit('recommendation:new', rec);
     res.json({ ok: true, data: rec });
 });
 
-// ─── POST /api/incidents/:id/recommendations/:recId/reject ───────────────────
-
-router.post('/:id/recommendations/:recId/reject', (req: Request, res: Response) => {
-    const inc = incidents.get(req.params.id);
-    if (!inc) { res.status(404).json({ ok: false, error: 'Incident not found' }); return; }
-
-    const rec = inc.recommendations.find(r => r.id === req.params.recId);
+recommendationsRouter.post('/:id/reject', (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    const rec = recommendations.get(id);
     if (!rec) { res.status(404).json({ ok: false, error: 'Recommendation not found' }); return; }
 
     const { reason } = z.object({ reason: z.string().optional() }).parse(req.body ?? {});
-
-    rec.status    = 'rejected';
-    inc.updatedAt = new Date();
-
-    addTimeline(inc.id, { label: `AI recommendation rejected: ${rec.action}`, type: 'operator', actor: getOperator(req), detail: reason });
-    addAudit({ type: 'recommendation_rejected', performedBy: getOperator(req), agency: 'Traffic Ops', targetId: rec.id, targetLabel: rec.action, details: { reason } });
-    wsManager.emit('incident:updated', inc);
+    rec.status = 'rejected';
+    addAudit({ type: 'ai_rejected', performedBy: getOperator(req), agency: 'Traffic Ops', targetId: rec.id, targetLabel: rec.title, details: { reason } });
     res.json({ ok: true, data: rec });
 });
 
-// ─── POST /api/incidents/:id/traffic/reroute ─────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────────────
+// SYSTEM HEALTH
+// ──────────────────────────────────────────────────────────────────────────────
 
-router.post('/:id/traffic/reroute', (req: Request, res: Response) => {
-    const inc = incidents.get(req.params.id);
-    if (!inc) { res.status(404).json({ ok: false, error: 'Incident not found' }); return; }
+export const healthRouter = Router();
 
-    const { routeId, geoJson } = z.object({
-        routeId: z.string().optional(),
-        geoJson: z.unknown().optional(),
-    }).parse(req.body ?? {});
-
-    // Update AI recommendation to in_progress
-    const routeRec = inc.recommendations.find(r => r.type === 'route');
-    if (routeRec) routeRec.status = 'in_progress';
-
-    // Reduce congestion index (simulated effect)
-    inc.congestionIndex = Math.max(0, inc.congestionIndex - 22);
-    inc.updatedAt = new Date();
-
-    addTimeline(inc.id, { label: 'Traffic rerouted via Mbagathi Way', type: 'system', actor: 'System', detail: `Route ${routeId ?? 'AI-optimal'} activated — signals adjusting` });
-    addAudit({ type: 'traffic_rerouted', performedBy: getOperator(req), agency: 'Traffic Ops', targetId: inc.id, targetLabel: inc.name, details: { routeId } });
-    wsManager.emit('incident:updated', inc);
-    res.json({ ok: true, data: { message: 'Reroute initiated', congestionIndex: inc.congestionIndex } });
+healthRouter.get('/', (_req: Request, res: Response) => {
+    // Freshen the updatedAt timestamp + randomise latency slightly
+    systemHealth.updatedAt = new Date();
+    systemHealth.latencyMs = 30 + Math.floor(Math.random() * 30);
+    res.json({ ok: true, data: systemHealth });
 });
 
-// ─── POST /api/incidents/:id/signals/adjust ──────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────────────
+// PREDICTIVE
+// ──────────────────────────────────────────────────────────────────────────────
 
-router.post('/:id/signals/adjust', (req: Request, res: Response) => {
-    const inc = incidents.get(req.params.id);
-    if (!inc) { res.status(404).json({ ok: false, error: 'Incident not found' }); return; }
+export const predictiveRouter = Router();
 
-    const signalRec = inc.recommendations.find(r => r.type === 'signal');
-    if (signalRec) signalRec.status = 'in_progress';
-
-    inc.updatedAt = new Date();
-
-    addTimeline(inc.id, { label: 'Signal timing adjusted — 3 junctions', type: 'system', actor: 'System', detail: 'Mbagathi, Langata, James Gichuru — green phase extended +15s' });
-    wsManager.emit('incident:updated', inc);
-    res.json({ ok: true, data: { message: 'Signal adjustment applied', junctions: 3 } });
+predictiveRouter.get('/', (_req: Request, res: Response) => {
+    res.json({ ok: true, data: predictiveData });
 });
 
-// ─── POST /api/incidents/:id/responders/:rspId/dispatch ──────────────────────
-
-router.post('/:id/responders/:rspId/dispatch', (req: Request, res: Response) => {
-    const inc = incidents.get(req.params.id);
-    if (!inc) { res.status(404).json({ ok: false, error: 'Incident not found' }); return; }
-
-    const rsp = inc.responders.find(r => r.id === req.params.rspId);
-    if (!rsp) { res.status(404).json({ ok: false, error: 'Responder not found' }); return; }
-
-    const { eta } = z.object({ eta: z.number().optional() }).parse(req.body ?? {});
-
-    rsp.status    = 'dispatched';
-    rsp.eta       = eta ?? 12;
-    inc.updatedAt = new Date();
-
-    addTimeline(inc.id, { label: `${rsp.name} dispatched`, type: 'responder', actor: rsp.badge, detail: `ETA ${rsp.eta} min from current position` });
-    addAudit({ type: 'responder_dispatched', performedBy: getOperator(req), agency: 'Emergency Services', targetId: rsp.id, targetLabel: rsp.name });
-    wsManager.emit('incident:updated', inc);
-    wsManager.emit('responder:updated', { incidentId: inc.id, responderId: rsp.id, status: rsp.status, eta: rsp.eta });
-    res.json({ ok: true, data: rsp });
+predictiveRouter.get('/hotspots', (_req: Request, res: Response) => {
+    res.json({ ok: true, data: predictiveData.hotspots });
 });
 
-// ─── PATCH /api/incidents/:id/responders/:rspId/route ────────────────────────
-
-router.patch('/:id/responders/:rspId/route', (req: Request, res: Response) => {
-    const inc = incidents.get(req.params.id);
-    if (!inc) { res.status(404).json({ ok: false, error: 'Incident not found' }); return; }
-
-    const rsp = inc.responders.find(r => r.id === req.params.rspId);
-    if (!rsp) { res.status(404).json({ ok: false, error: 'Responder not found' }); return; }
-
-    const { optimize, newEta } = z.object({
-        optimize: z.boolean().optional(),
-        newEta:   z.number().optional(),
-    }).parse(req.body ?? {});
-
-    // Apply 2-min saving from AI optimisation
-    if (optimize && rsp.eta !== null) rsp.eta = Math.max(1, rsp.eta - 2);
-    if (newEta !== undefined) rsp.eta = newEta;
-    inc.updatedAt = new Date();
-
-    addTimeline(inc.id, { label: `${rsp.name} rerouted`, type: 'system', actor: 'ATMS-AI', detail: `AI-optimised route applied — new ETA ${rsp.eta} min` });
-    wsManager.emit('responder:updated', { incidentId: inc.id, responderId: rsp.id, eta: rsp.eta });
-    res.json({ ok: true, data: rsp });
+predictiveRouter.get('/forecast', (_req: Request, res: Response) => {
+    res.json({ ok: true, data: predictiveData.congestionForecast });
 });
 
-export default router;
+predictiveRouter.get('/peak-hours', (_req: Request, res: Response) => {
+    res.json({ ok: true, data: predictiveData.peakHours });
+});

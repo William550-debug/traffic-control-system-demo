@@ -72,14 +72,14 @@ Frontend changes (copy from outputs/):
 ────────────────────────────────────────────────────────
   lib/proxy.ts                     ← proxy utility
   providers/websocket-provider.tsx ← replaces existing file
-  hooks/use-alerts.ts              ← replaces existing file
+  hooks/use-alertRouter.ts              ← replaces existing file
   hooks/use-system-health.ts       ← replaces existing file
   hooks/use-recommendations.ts     ← replaces existing file
   hooks/use-audit-log.ts           ← replaces existing file
   hooks/use-corridor.ts            ← replaces existing file
   hooks/use-predictive.ts          ← replaces existing file
 
-New API route files — create each at the path shown in api-routes-index.ts:
+New API route files — create each at the path shown in api-routes-backend-index.ts:
   app/api/alerts/route.ts
   app/api/alerts/[id]/acknowledge/route.ts
   app/api/alerts/[id]/ignore/route.ts
@@ -116,12 +116,12 @@ Backend (new directory alongside your frontend):
   backend/tsconfig.json
   backend/.env.example
   backend/README.md
-  backend/src/index.ts
-  backend/src/types/index.ts
+  backend/src/backend-index.ts
+  backend/src/types/backend-index.ts
   backend/src/data/store.ts
-  backend/src/middleware/index.ts
+  backend/src/middleware/backend-index.ts
   backend/src/websocket/manager.ts
-  backend/src/routes/alerts.ts
-  backend/src/routes/incidents.ts
+  backend/src/routes/alertRouter.ts
+  backend/src/routes/incidentRouter.ts
   backend/src/routes/misc.ts
 */

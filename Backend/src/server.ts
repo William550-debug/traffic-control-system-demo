@@ -5,20 +5,17 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 
-import { corsOptions, limiter, authMiddleware, errorHandler, notFoundHandler } from './middleware';
-import { wsManager } from './websocket/manager';
+import { corsOptions, limiter, authMiddleware, errorHandler, notFoundHandler } from './middleware/index.js';
+import { wsManager } from './websocket/manager.js';
 
-import alertsRouter  from './routes/alerts';
-import incidentsRouter from './routes/incidents';
+import authRouter        from './routes/authRouter.js';
+import alertsRouter      from './routes/alertRouter.js';
+import incidentsRouter   from './routes/incidentRouter.js';
 import {
-    corridorsRouter,
-    auditRouter,
-    recommendationsRouter,
-    healthRouter,
-    predictiveRouter,
-} from './routes/misc';
-
-// ─── App ──────────────────────────────────────────────────────────────────────
+    corridorsRouter, auditRouter, recommendationsRouter,
+    healthRouter, predictiveRouter,
+} from './routes/misc.js';
+import parkingRouter from "./routes/parkingRouter.js";
 
 const app    = express();
 const server = http.createServer(app);
@@ -26,10 +23,7 @@ const PORT   = parseInt(process.env.PORT ?? '4000', 10);
 
 // ─── Global middleware ────────────────────────────────────────────────────────
 
-app.use(helmet({
-    // Allow cross-origin requests (Next.js dev server)
-    crossOriginResourcePolicy: { policy: 'cross-origin' },
-}));
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
@@ -39,20 +33,19 @@ app.use(limiter);
 
 app.get('/health', (_req, res) => {
     res.json({
-        ok:          true,
-        service:     'ATMS Backend',
-        version:     '1.0.0',
+        ok: true, service: 'ATMS Backend', version: '1.0.0',
         environment: process.env.NODE_ENV,
-        uptime:      Math.floor(process.uptime()),
-        wsClients:   wsManager.clientCount,
-        timestamp:   new Date().toISOString(),
+        uptime: Math.floor(process.uptime()),
+        wsClients: wsManager.clientCount,
+        timestamp: new Date().toISOString(),
     });
 });
 
-// ─── API routes ───────────────────────────────────────────────────────────────
-//
-// All routes below require auth (Bearer token = process.env.API_SECRET).
-// During development, set API_SECRET= (empty) to skip auth entirely.
+// ─── Auth routes (unauthenticated — login doesn't need a token yet) ───────────
+
+app.use('/api/auth', authRouter);
+
+// ─── All routes below require Bearer token ────────────────────────────────────
 
 app.use(authMiddleware);
 
@@ -63,6 +56,8 @@ app.use('/api/audit',           auditRouter);
 app.use('/api/recommendations', recommendationsRouter);
 app.use('/api/health',          healthRouter);
 app.use('/api/predictive',      predictiveRouter);
+app.use('/api/parking', parkingRouter);
+
 
 // ─── Error handlers ───────────────────────────────────────────────────────────
 
@@ -83,21 +78,16 @@ server.listen(PORT, () => {
 ║  HTTP   → http://localhost:${PORT}               ║
 ║  WS     → ws://localhost:${PORT}/ws              ║
 ║  Health → http://localhost:${PORT}/health         ║
-║  Env    → ${(process.env.NODE_ENV ?? 'development').padEnd(34)}║
+║  Auth   → POST http://localhost:${PORT}/api/auth/login ║
 ╚═══════════════════════════════════════════════╝
     `.trim());
 });
 
-// ─── Graceful shutdown ────────────────────────────────────────────────────────
-
 process.on('SIGTERM', () => {
-    console.log('[SERVER] SIGTERM received — shutting down gracefully');
     wsManager.shutdown();
     server.close(() => { console.log('[SERVER] Closed'); process.exit(0); });
 });
-
 process.on('SIGINT', () => {
-    console.log('[SERVER] SIGINT received');
     wsManager.shutdown();
     server.close(() => process.exit(0));
 });

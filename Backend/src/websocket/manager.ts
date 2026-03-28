@@ -1,11 +1,11 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import type { Server } from 'http';
-import type { WsEvent, WsEventType } from '../types/index.js';
+import type { WsEvent, WsEventType } from '../types/backend-index.js';
 
 // ─── WebSocket manager ────────────────────────────────────────────────────────
 
-class WebSocketManager {
+export class WebSocketManager {
     private wss: WebSocketServer | null = null;
     private clients = new Set<WebSocket>();
     private heartbeatInterval: NodeJS.Timeout | null = null;

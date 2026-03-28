@@ -1,2252 +1,1300 @@
-'use client';
+"use client";
 
-/**
- * /operator/modes — Mode Control Panel  (redesigned)
- * ────────────────────────────────────────────────────
- *
- * New additions:
- *  ① Daily Traffic Summary   — KPI cards + 24h bar chart (canvas-free, CSS bars)
- *  ② Peak Hours Event Log    — timeline of high-activity windows with incident density
- *  ③ Incident Count          — running counters per severity with delta vs yesterday
- *  ④ Exportable PDF/CSV      — client-side generation, no server dependency
- *
- * Tab layout:
- *  [Status]  [Thresholds]  [History]  [Analytics ✦]
- */
-
-import React, { useState, useEffect, useMemo, startTransition } from 'react';
+import { useState } from "react";
 import {
-    Bot, ShieldCheck, ArrowRight, Clock, RefreshCw, User, Zap, History,
-    Settings2, Gauge, Brain, CloudRain, Siren, CalendarDays, AlertTriangle,
-    Save, RotateCcw, CheckCircle2, ArrowLeftRight, Cpu, ChevronDown,
-    ChevronRight as ChevronRightIcon, Activity,
-    BarChart3, FileDown, FileText, Car, AlertCircle, Flame, Info,
-    Radio, Download, ArrowUpRight, ArrowDownRight,
-    Calendar, Loader2,
-} from 'lucide-react';
-import { useMode }    from '@/providers/mode-provider';
-import { useAuth }    from '@/providers/auth-provider';
-import { Badge }      from '@/components/ui/badge';
-import { Button }     from '@/components/ui/button';
-import { Card }       from '@/components/ui/card';
-import { Progress }   from '@/components/ui/progress';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Slider }     from '@/components/ui/slider';
+    Brain, Bus, Signal, Layers, Settings, User, ChevronDown,
+    Lock, Unlock, Check, X, Edit3, Shield, ShieldOff, ShieldAlert,
+    ToggleLeft, ToggleRight, Info, RefreshCw, Clock, Bell,
+    Route, History, BadgeCheck, Activity, Gauge, Timer,
+    ArrowRight, ArrowUpRight, Navigation, TrafficCone, Zap,
+    CircleDot, GitBranch, Focus, Milestone, ListChecks,
+    Eye, CheckCircle2, Radio, Map, Waypoints, Siren,
+    Building2, TreePine, Briefcase, TrendingUp, TrendingDown,
+    Minus, AlertTriangle, ChevronRight, LayoutGrid, Workflow,
+} from "lucide-react";
+
+import { Badge }                           from "@/components/ui/badge";
+import { Button }                          from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-    Tabs, TabsList, TabsTrigger, TabsContent,
-} from '@/components/ui/tabs';
-import {
-    Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from '@/components/ui/table';
-import {
-    Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
-} from '@/components/ui/tooltip';
-import type { ModeTransition, OperatingMode, ModeThresholds } from '@/types';
+    DropdownMenu, DropdownMenuContent, DropdownMenuItem,
+    DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Progress }                        from "@/components/ui/progress";
+import { ScrollArea }                      from "@/components/ui/scroll-area";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { Slider }                          from "@/components/ui/slider";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
-// ─── Design tokens ────────────────────────────────────────────────────────────
+/* ─────────────────────────────────────────────
+   SHARED TYPES
+───────────────────────────────────────────── */
+type Agency       = "traffic_control" | "psv_operations" | "urban_planning" | "enforcement";
+type AgencyAIMode = "full_auto" | "assisted" | "operator" | "disabled";
+type SignalMode   = "ai_managed" | "manual" | "fixed" | "emergency";
+type RouteStatus  = "critical" | "delayed" | "normal" | "optimal";
+type SystemPhase  = 1 | 2 | 3;
+type PhaseStatus  = "active" | "pending" | "locked";
 
-const MODE_COLOR: Record<OperatingMode, string> = {
-    'AI-Prioritized':  'var(--accent-primary)',
-    'Human-Validated': '#f5c518',
-};
-const MODE_BG: Record<OperatingMode, string> = {
-    'AI-Prioritized':  'rgba(59,158,255,0.07)',
-    'Human-Validated': 'rgba(245,197,24,0.07)',
-};
-const MODE_BORDER: Record<OperatingMode, string> = {
-    'AI-Prioritized':  'rgba(59,158,255,0.28)',
-    'Human-Validated': 'rgba(245,197,24,0.28)',
-};
-const MODE_ICON: Record<OperatingMode, React.ElementType> = {
-    'AI-Prioritized':  Bot,
-    'Human-Validated': ShieldCheck,
-};
-const MODE_SHORT: Record<OperatingMode, string> = {
-    'AI-Prioritized':  'AI',
-    'Human-Validated': 'HV',
-};
-
-const SEVERITY_COLORS: Record<string, string> = {
-    critical: '#ff3b3b',
-    high:     '#ff8800',
-    medium:   '#f5c518',
-    low:      '#50c878',
-    info:     '#64a0ff',
-};
-
-// ─── Mock analytics data (replace with real hook/API) ─────────────────────────
-
-function useDailyTrafficData() {
-    // 24-hour traffic volume bars (0–100 normalised)
-    const hourlyVolume = useMemo<number[]>(() => [
-        12, 9, 7, 6, 8, 18, 42, 78, 91, 85, 74, 70,
-        75, 72, 68, 65, 72, 88, 95, 82, 60, 42, 28, 16,
-    ], []);
-
-    const summary = useMemo(() => ({
-        totalVehicles:   142_830,
-        avgSpeedKmh:     38,
-        peakVolumeHour:  '07:00–08:00',
-        peakVolumePct:   95,
-        congestionIndex: 72,           // 0–100
-        comparedYesterday: +8.4,       // % delta
-    }), []);
-
-    const incidentCounts = useMemo(() => ({
-        critical: 2,
-        high:     7,
-        medium:   18,
-        low:      43,
-        info:     11,
-        total:    81,
-        deltaVsYesterday: -14,         // % delta
-    }), []);
-
-    const peakHours = useMemo(() => [
-        { start: '07:00', end: '09:00', label: 'Morning Peak',   volume: 91, incidents: 12, mode: 'Human-Validated' as OperatingMode },
-        { start: '12:00', end: '13:00', label: 'Midday Surge',   volume: 75, incidents: 5,  mode: 'AI-Prioritized'  as OperatingMode },
-        { start: '17:00', end: '19:00', label: 'Evening Peak',   volume: 95, incidents: 21, mode: 'Human-Validated' as OperatingMode },
-        { start: '22:00', end: '23:00', label: 'Night Incident', volume: 42, incidents: 8,  mode: 'Human-Validated' as OperatingMode },
-    ], []);
-
-    return { hourlyVolume, summary, incidentCounts, peakHours };
+interface AgencyWorkspace {
+    id: Agency;
+    label: string;
+    shortLabel: string;
+    description: string;
+    color: string;
+    darkColor: string;
+    bg: string;
+    border: string;
+    icon: React.ElementType;
+    aiMode: AgencyAIMode;
+    operatorOnDuty: string;
+    jurisdiction: string[];
+    pendingActions: number;
+    lastActivity: string;
 }
 
-// ─── Shared helpers ───────────────────────────────────────────────────────────
-
-const COOLDOWN_MS = 5 * 60 * 1000;
-
-function fmtTime(d: Date): string {
-    return new Date(d).toLocaleTimeString('en-KE', {
-        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-    });
-}
-function fmtRelative(d: Date): string {
-    const s = Math.floor((Date.now() - new Date(d).getTime()) / 1000);
-    if (s < 60)  return `${s}s ago`;
-    const m = Math.floor(s / 60);
-    if (m < 60)  return `${m}m ago`;
-    return `${Math.floor(m / 60)}h ago`;
-}
-function fmtDate(d: Date): string {
-    const diff = Math.floor(
-        (new Date().setHours(0,0,0,0) - new Date(d).setHours(0,0,0,0)) / 86_400_000
-    );
-    if (diff === 0) return 'Today';
-    if (diff === 1) return 'Yesterday';
-    return new Date(d).toLocaleDateString('en-KE', { weekday: 'short', day: 'numeric', month: 'short' });
+interface ControlModule {
+    id: string;
+    agency: Agency;
+    name: string;
+    description: string;
+    status: "active" | "standby" | "paused" | "error";
+    aiControlled: boolean;
+    lastUpdated: string;
+    metrics: { label: string; value: string; color: string }[];
 }
 
-function useCooldown(transitions: ModeTransition[]): number {
-    const [rem, setRem] = useState(0);
-    useEffect(() => {
-        const latest = transitions[0];
-        if (!latest) { setRem(0); return; }
-        const tick = () => setRem(Math.max(0, COOLDOWN_MS - (Date.now() - new Date(latest.triggeredAt).getTime())));
-        tick();
-        const id = setInterval(tick, 1000);
-        return () => clearInterval(id);
-    }, [transitions]);
-    return rem;
+interface SignalCorridor {
+    id: string; name: string; routeId: string;
+    signals: number; mode: SignalMode;
+    avgGreenTime: number; aiRecommendedGreen: number;
+    cycleLength: number;
+    psvThroughput: number;
+    priorityActive: boolean;
+    lastAdjusted: string;
+    lockedBy?: Agency;
 }
 
-// ─── Export utilities ─────────────────────────────────────────────────────────
-
-function buildCSV(transitions: ModeTransition[]): string {
-    const header = ['ID', 'From', 'To', 'Triggered By', 'Operator', 'Reason', 'Timestamp'].join(',');
-    const rows = transitions.map(t => [
-        t.id,
-        t.from,
-        t.to,
-        t.triggeredBy,
-        t.operatorId ?? 'System',
-        `"${(t.reason ?? '').replace(/"/g, '""')}"`,
-        new Date(t.triggeredAt).toISOString(),
-    ].join(','));
-    return [header, ...rows].join('\n');
+interface RouteMode {
+    id: string; name: string; corridor: string;
+    origin: string; destination: string;
+    status: RouteStatus; aiRoutingActive: boolean;
+    signalMode: SignalMode;
+    complianceRate: number; efficiency: number;
+    activeVehicles: number; totalVehicles: number;
+    avgDelay: number; phase: SystemPhase;
+    governedBy: Agency[];
+    aiLocked: boolean;
 }
 
-function downloadCSV(content: string, filename: string) {
-    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href     = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
+interface PhaseModule {
+    phase: SystemPhase;
+    label: string;
+    status: PhaseStatus;
+    description: string;
+    routes: number;
+    features: string[];
+    aiCapabilities: string[];
+    completion: number;
+    targetDate: string;
 }
 
-function downloadPDF(transitions: ModeTransition[], summary: ReturnType<typeof useDailyTrafficData>['summary'], incidentCounts: ReturnType<typeof useDailyTrafficData>['incidentCounts']) {
-    // Build HTML document and print-to-PDF via window.print()
-    const date = new Date().toLocaleDateString('en-KE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-    const rows = transitions.slice(0, 100).map(t => `
-        <tr>
-            <td>${new Date(t.triggeredAt).toLocaleTimeString('en-KE', { hour12: false })}</td>
-            <td>${fmtDate(t.triggeredAt)}</td>
-            <td>${t.from} → ${t.to}</td>
-            <td>${t.triggeredBy}</td>
-            <td>${t.operatorId ?? 'System'}</td>
-            <td>${(t.reason ?? '').substring(0, 80)}</td>
-        </tr>
-    `).join('');
-
-    const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8"/>
-    <title>Nairobi ATMS — Daily Traffic Report</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Courier New', monospace; font-size: 10px; color: #0a0a0a; padding: 32px; }
-        h1 { font-family: sans-serif; font-size: 18px; font-weight: 800; margin-bottom: 4px; }
-        .meta { color: #666; font-size: 9px; margin-bottom: 24px; }
-        .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
-        .kpi { border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px; }
-        .kpi-label { font-size: 8px; text-transform: uppercase; letter-spacing: .08em; color: #888; margin-bottom: 4px; }
-        .kpi-value { font-size: 18px; font-weight: 700; color: #0a0a0a; }
-        .kpi-sub { font-size: 8px; color: #888; margin-top: 2px; }
-        h2 { font-family: sans-serif; font-size: 12px; font-weight: 700; margin-bottom: 10px; margin-top: 20px; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px; }
-        table { width: 100%; border-collapse: collapse; }
-        th { text-align: left; font-size: 8px; letter-spacing: .1em; text-transform: uppercase; color: #666; padding: 6px 8px; border-bottom: 1px solid #e0e0e0; }
-        td { padding: 6px 8px; border-bottom: 1px solid #f0f0f0; font-size: 9px; color: #333; vertical-align: top; }
-        tr:nth-child(even) { background: #fafafa; }
-        .footer { margin-top: 32px; font-size: 8px; color: #999; border-top: 1px solid #e0e0e0; padding-top: 12px; }
-        @media print { @page { margin: 20mm; } }
-    </style>
-</head>
-<body>
-    <h1>Nairobi ATMS — Daily Traffic Report</h1>
-    <p class="meta">Generated: ${date} &nbsp;|&nbsp; Nairobi Advanced Traffic Management System &nbsp;|&nbsp; CONFIDENTIAL</p>
-
-    <h2>Daily Traffic Summary</h2>
-    <div class="kpi-grid">
-        <div class="kpi"><div class="kpi-label">Total Vehicles</div><div class="kpi-value">${summary.totalVehicles.toLocaleString()}</div><div class="kpi-sub">+${summary.comparedYesterday}% vs yesterday</div></div>
-        <div class="kpi"><div class="kpi-label">Avg Speed</div><div class="kpi-value">${summary.avgSpeedKmh} km/h</div><div class="kpi-sub">City-wide average</div></div>
-        <div class="kpi"><div class="kpi-label">Congestion Index</div><div class="kpi-value">${summary.congestionIndex}/100</div><div class="kpi-sub">Peak: ${summary.peakVolumeHour}</div></div>
-        <div class="kpi"><div class="kpi-label">Total Incidents</div><div class="kpi-value">${incidentCounts.total}</div><div class="kpi-sub">Critical: ${incidentCounts.critical} &nbsp; High: ${incidentCounts.high}</div></div>
-    </div>
-
-    <h2>Mode Transition Log (${transitions.length} events)</h2>
-    <table>
-        <thead><tr><th>Time</th><th>Date</th><th>Transition</th><th>Trigger</th><th>Operator</th><th>Reason</th></tr></thead>
-        <tbody>${rows}</tbody>
-    </table>
-
-    <div class="footer">
-        Nairobi ATMS · Audit Report · ${new Date().toISOString()} · Page 1
-    </div>
-</body>
-</html>`;
-
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-    const url  = URL.createObjectURL(blob);
-    const win  = window.open(url, '_blank');
-    if (!win) { URL.revokeObjectURL(url); return; }
-    setTimeout(() => {
-        win.print();
-        URL.revokeObjectURL(url);
-    }, 400);
+interface CrossAgencyItem {
+    id: string; type: "coordination" | "conflict" | "handoff";
+    agencies: Agency[]; subject: string;
+    description: string; status: "pending" | "resolved" | "active";
+    priority: "high" | "medium" | "low";
+    timestamp: string;
 }
 
-// ─── Shared sub-components ────────────────────────────────────────────────────
+/* ─────────────────────────────────────────────
+   MOCK DATA
+───────────────────────────────────────────── */
+const SYSTEM_PHASE: SystemPhase = 2;
 
-function ModePill({ mode, size = 'sm' }: { mode: OperatingMode; size?: 'sm' | 'md' }) {
-    const Icon  = MODE_ICON[mode];
-    const color = MODE_COLOR[mode];
-    return (
-        <div className="flex items-center gap-1.25 rounded-lg px-2 py-0.75"
-             style={{ background: MODE_BG[mode], border: `1px solid ${MODE_BORDER[mode]}` }}>
-            <Icon size={size === 'md' ? 11 : 9} strokeWidth={2.5} style={{ color }} />
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: size === 'md' ? 'clamp(0.54rem, 0.48rem + 0.16vw, 0.62rem)' : '0.5rem', fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color, whiteSpace: 'nowrap' }}>
-                {MODE_SHORT[mode]}
-            </span>
-        </div>
-    );
-}
-
-function SectionCard({ title, subtitle, icon: Icon, iconColor, children, noPad = false, action }: {
-    title:      string;
-    subtitle?:  string;
-    icon:       React.ElementType;
-    iconColor?: string;
-    children:   React.ReactNode;
-    noPad?:     boolean;
-    action?:    React.ReactNode;
-}) {
-    return (
-        <Card className="flex flex-col overflow-hidden h-full"
-              style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-default)' }}>
-            <div className="flex items-center gap-3 px-5 py-4 shrink-0"
-                 style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                <div className="flex items-center justify-center shrink-0 rounded-lg"
-                     style={{ width: 30, height: 30, background: iconColor ? `${iconColor}14` : 'var(--bg-elevated)', border: `1px solid ${iconColor ? `${iconColor}32` : 'var(--border-default)'}` }}>
-                    <Icon size={14} strokeWidth={2} style={{ color: iconColor ?? 'var(--text-muted)' }} />
-                </div>
-                <div className="flex-1 min-w-0">
-                    <p style={{ fontFamily: 'var(--font-display)', fontSize: 'clamp(0.68rem, 0.6rem + 0.24vw, 0.78rem)', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1, marginBottom: 3 }}>
-                        {title}
-                    </p>
-                    {subtitle && (
-                        <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.5rem, 0.44rem + 0.16vw, 0.56rem)', color: 'var(--text-muted)', lineHeight: 1 }}>
-                            {subtitle}
-                        </p>
-                    )}
-                </div>
-                {action}
-            </div>
-            <div className={noPad ? '' : 'p-5 flex-1'}>{children}</div>
-        </Card>
-    );
-}
-
-function Toggle({ checked, onChange, color = 'var(--accent-primary)' }: { checked: boolean; onChange: (v: boolean) => void; color?: string }) {
-    return (
-        <button role="switch" aria-checked={checked} onClick={() => onChange(!checked)}
-                className="relative shrink-0 rounded-full transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--accent-primary)"
-                style={{ width: 42, height: 24, background: checked ? color : 'var(--bg-elevated)', border: `1px solid ${checked ? color : 'var(--border-strong)'}`, boxShadow: checked ? `0 0 10px ${color}40` : 'none' }}>
-            <span className="absolute top-0.75 rounded-full bg-white transition-all duration-200"
-                  style={{ width: 16, height: 16, left: checked ? 'calc(100% - 19px)' : '3px', boxShadow: '0 1px 3px rgba(0,0,0,0.4)' }} />
-        </button>
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// LIVE BAND
-// ─────────────────────────────────────────────────────────────────────────────
-
-function LiveBand() {
-    const { currentMode, previousMode, autoTransitionEnabled, transitions } = useMode();
-    const cooldownMs  = useCooldown(transitions);
-    const inCooldown  = cooldownMs > 0;
-    const cd          = `${Math.floor(Math.ceil(cooldownMs / 1000) / 60)}:${String(Math.ceil(cooldownMs / 1000) % 60).padStart(2, '0')}`;
-    const CurrentIcon = MODE_ICON[currentMode];
-    const color       = MODE_COLOR[currentMode];
-    const latest      = transitions[0];
-
-    return (
-        <div className="shrink-0 w-full flex flex-wrap items-center gap-x-6 gap-y-2 px-5 py-3"
-             style={{ background: MODE_BG[currentMode], borderBottom: `1px solid ${MODE_BORDER[currentMode]}`, transition: 'all 500ms ease' }}>
-            {/* Current mode */}
-            <div className="flex items-center gap-3 shrink-0">
-                <div className="flex items-center justify-center rounded-xl shrink-0"
-                     style={{ width: 38, height: 38, background: `${color}18`, border: `1px solid ${color}38`, boxShadow: `0 0 14px ${color}22` }}>
-                    <CurrentIcon size={18} strokeWidth={2} style={{ color }} />
-                </div>
-                <div>
-                    <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.46rem, 0.4rem + 0.14vw, 0.52rem)', letterSpacing: '0.12em', textTransform: 'uppercase', color, opacity: 0.65, lineHeight: 1, marginBottom: 3 }}>
-                        Active mode
-                    </p>
-                    <p style={{ fontFamily: 'var(--font-display)', fontSize: 'clamp(0.88rem, 0.74rem + 0.5vw, 1.1rem)', fontWeight: 800, color, lineHeight: 1 }}>
-                        {currentMode}
-                    </p>
-                </div>
-            </div>
-
-            <div className="hidden sm:block w-px h-8 shrink-0" style={{ background: `${color}30` }} />
-
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 flex-1 min-w-0">
-                {previousMode && (
-                    <div className="flex items-center gap-2 shrink-0">
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.48rem, 0.42rem + 0.14vw, 0.54rem)', color: 'var(--text-muted)', letterSpacing: '0.06em' }}>
-                            Previously
-                        </span>
-                        <ModePill mode={previousMode} />
-                    </div>
-                )}
-                {inCooldown && (
-                    <div className="flex items-center gap-1.25 shrink-0">
-                        <Clock size={11} strokeWidth={2} style={{ color: '#f5c518' }} />
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.5rem, 0.44rem + 0.16vw, 0.58rem)', color: '#f5c518', fontWeight: 700, letterSpacing: '0.06em' }}>
-                            Cooldown {cd}
-                        </span>
-                    </div>
-                )}
-                <div className="flex items-center gap-1.25 shrink-0">
-                    <div style={{ width: 5, height: 5, borderRadius: '50%', background: autoTransitionEnabled ? 'var(--status-online)' : 'var(--text-disabled)', boxShadow: autoTransitionEnabled ? '0 0 4px var(--status-online)' : 'none', animation: autoTransitionEnabled ? 'pulse-dot 1.5s ease infinite' : 'none' }} />
-                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.48rem, 0.42rem + 0.14vw, 0.54rem)', color: autoTransitionEnabled ? 'var(--text-secondary)' : 'var(--text-disabled)', letterSpacing: '0.06em' }}>
-                        Auto-transition {autoTransitionEnabled ? 'on' : 'off'}
-                    </span>
-                </div>
-                {latest && (
-                    <div className="flex items-center gap-1.25 shrink-0">
-                        <Activity size={10} strokeWidth={2} style={{ color: 'var(--text-muted)' }} />
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.48rem, 0.42rem + 0.14vw, 0.54rem)', color: 'var(--text-muted)', letterSpacing: '0.06em' }}>
-                            Last: {fmtRelative(latest.triggeredAt)}
-                        </span>
-                    </div>
-                )}
-            </div>
-
-            <Badge variant="outline" className="shrink-0 h-5 px-2 tabular-nums"
-                   style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.46rem, 0.4rem + 0.14vw, 0.52rem)', fontWeight: 700, background: `${color}10`, borderColor: `${color}30`, color }}>
-                {transitions.length} transition{transitions.length !== 1 ? 's' : ''} this session
-            </Badge>
-        </div>
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TAB 1: STATUS
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ─────────────────────────────────────────────────────────────────────────────
-// StatusTab — redesigned
-// Drop-in replacement. All hooks, state, logic, and handlers are unchanged.
-// Only the JSX + style layer is updated.
-// ─────────────────────────────────────────────────────────────────────────────
-
-function StatusTab() {
-    const {
-        currentMode, previousMode,
-        autoTransitionEnabled, setAutoTransition,
-        transitions, manualOverride, canOverride,
-    } = useMode();
-    const { user } = useAuth();
-
-    const [overrideOpen,   setOverrideOpen]   = useState(false);
-    const [overrideReason, setOverrideReason] = useState('');
-
-    const cooldownMs  = useCooldown(transitions);
-    const inCooldown  = cooldownMs > 0;
-    const cdSecs      = Math.ceil(cooldownMs / 1000);
-    const cdDisplay   = `${Math.floor(cdSecs / 60)}:${String(cdSecs % 60).padStart(2, '0')}`;
-
-    const targetMode: OperatingMode = currentMode === 'AI-Prioritized'
-        ? 'Human-Validated'
-        : 'AI-Prioritized';
-
-    const color        = MODE_COLOR[currentMode];
-    const targetColor  = MODE_COLOR[targetMode];
-    const CurrentIcon  = MODE_ICON[currentMode];
-    const TargetIcon   = MODE_ICON[targetMode];
-
-    const handleOverride = () => {
-        if (!overrideReason.trim() || !user) return;
-        manualOverride(targetMode, overrideReason.trim(), user.id);
-        setOverrideReason('');
-        setOverrideOpen(false);
-    };
-
-    return (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-
-            {/* ════════════════════════════════════════════════
-                LEFT — Operating Mode
-            ════════════════════════════════════════════════ */}
-            <div
-                className="flex flex-col overflow-hidden rounded-2xl"
-                style={{
-                    background: 'var(--bg-raised)',
-                    border:     '1px solid var(--border-default)',
-                    boxShadow:  '0 2px 16px rgba(0,0,0,0.18)',
-                }}
-            >
-                {/* ── Card header ── */}
-                <div
-                    className="flex items-center gap-3 px-5 py-4 shrink-0"
-                    style={{ borderBottom: '1px solid var(--border-subtle)' }}
-                >
-                    <div
-                        className="flex items-center justify-center shrink-0 rounded-xl"
-                        style={{
-                            width:      34,
-                            height:     34,
-                            background: `${color}14`,
-                            border:     `1px solid ${color}28`,
-                        }}
-                    >
-                        <CurrentIcon size={15} strokeWidth={1.8} style={{ color }} />
-                    </div>
-                    <div className="flex flex-col gap-0.75 flex-1 min-w-0">
-                        <p style={{
-                            fontFamily:  'var(--font-display)',
-                            fontSize:    'clamp(0.72rem, 0.64rem + 0.24vw, 0.84rem)',
-                            fontWeight:  700,
-                            color:       'var(--text-primary)',
-                            lineHeight:  1,
-                        }}>
-                            Operating Mode
-                        </p>
-                        <p style={{
-                            fontFamily: 'var(--font-mono)',
-                            fontSize:   'clamp(0.5rem, 0.44rem + 0.14vw, 0.56rem)',
-                            color:      'var(--text-disabled)',
-                            lineHeight: 1,
-                        }}>
-                            Live system state and transition history
-                        </p>
-                    </div>
-                </div>
-
-                <div className="flex flex-col gap-5 p-5">
-
-                    {/* ── Hero mode display ── */}
-                    <div
-                        className="relative flex items-center gap-4 px-5 py-5 rounded-2xl overflow-hidden"
-                        style={{
-                            background: `linear-gradient(135deg, ${color}10 0%, ${color}04 100%)`,
-                            border:     `1px solid ${color}28`,
-                            transition: 'all 600ms ease',
-                        }}
-                    >
-                        {/* Decorative corner glow */}
-                        <div
-                            className="absolute top-0 right-0 w-24 h-24 pointer-events-none"
-                            style={{
-                                background:    `radial-gradient(circle at top right, ${color}18 0%, transparent 70%)`,
-                                borderRadius:  '0 1rem 0 0',
-                            }}
-                        />
-
-                        {/* Mode icon */}
-                        <div
-                            className="flex items-center justify-center shrink-0 rounded-2xl"
-                            style={{
-                                width:     54,
-                                height:    54,
-                                background:`${color}18`,
-                                border:    `1px solid ${color}32`,
-                                boxShadow: `0 0 20px ${color}22`,
-                            }}
-                        >
-                            <CurrentIcon size={24} strokeWidth={1.8} style={{ color }} />
-                        </div>
-
-                        {/* Mode label */}
-                        <div className="flex flex-col gap-1.5 min-w-0">
-                            <p style={{
-                                fontFamily:    'var(--font-mono)',
-                                fontSize:      'clamp(0.46rem, 0.4rem + 0.12vw, 0.52rem)',
-                                letterSpacing: '0.14em',
-                                textTransform: 'uppercase',
-                                color,
-                                opacity:       0.6,
-                                lineHeight:    1,
-                            }}>
-                                Active mode
-                            </p>
-                            <p style={{
-                                fontFamily: 'var(--font-display)',
-                                fontSize:   'clamp(1.05rem, 0.88rem + 0.58vw, 1.32rem)',
-                                fontWeight: 800,
-                                color,
-                                lineHeight: 1,
-                                letterSpacing: '-0.01em',
-                            }}>
-                                {currentMode}
-                            </p>
-                        </div>
-
-                        {/* Live pulse badge */}
-                        <div className="ml-auto flex items-center gap-1.5 shrink-0">
-                            <span
-                                className="relative flex h-2 w-2"
-                            >
-                                <span
-                                    className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-60"
-                                    style={{ background: color }}
-                                />
-                                <span
-                                    className="relative inline-flex rounded-full h-2 w-2"
-                                    style={{ background: color }}
-                                />
-                            </span>
-                            <span
-                                style={{
-                                    fontFamily:    'var(--font-mono)',
-                                    fontSize:      '0.48rem',
-                                    letterSpacing: '0.1em',
-                                    textTransform: 'uppercase',
-                                    color,
-                                    opacity:       0.75,
-                                }}
-                            >
-                                Live
-                            </span>
-                        </div>
-                    </div>
-
-                    {/* ── KPI stats ── */}
-                    <div className="grid grid-cols-3 gap-3">
-                        {[
-                            {
-                                label: 'Previous',
-                                value: previousMode ? MODE_SHORT[previousMode] : '—',
-                                sub:   previousMode ? 'last mode' : 'no prior',
-                                color: previousMode ? MODE_COLOR[previousMode] : 'var(--text-disabled)',
-                            },
-                            {
-                                label: 'Transitions',
-                                value: String(transitions.length),
-                                sub:   'this session',
-                                color: transitions.length > 0 ? 'var(--accent-primary)' : 'var(--text-primary)',
-                            },
-                            {
-                                label: 'Cooldown',
-                                value: inCooldown ? cdDisplay : 'Clear',
-                                sub:   inCooldown ? 'remaining' : 'ready',
-                                color: inCooldown ? '#f5c518' : 'var(--status-online)',
-                            },
-                        ].map(stat => (
-                            <div
-                                key={stat.label}
-                                className="flex flex-col gap-2 px-3 pt-3 pb-3.5 rounded-xl"
-                                style={{
-                                    background: 'var(--bg-elevated)',
-                                    border:     '1px solid var(--border-subtle)',
-                                }}
-                            >
-                                <span style={{
-                                    fontFamily:    'var(--font-mono)',
-                                    fontSize:      'clamp(0.44rem, 0.38rem + 0.1vw, 0.5rem)',
-                                    letterSpacing: '0.12em',
-                                    textTransform: 'uppercase',
-                                    color:         'var(--text-disabled)',
-                                    lineHeight:    1,
-                                }}>
-                                    {stat.label}
-                                </span>
-                                <span style={{
-                                    fontFamily:   'var(--font-display)',
-                                    fontSize:     'clamp(0.88rem, 0.74rem + 0.46vw, 1.08rem)',
-                                    fontWeight:   800,
-                                    color:        stat.color,
-                                    lineHeight:   1,
-                                    transition:   'color 400ms ease',
-                                    letterSpacing:'-0.01em',
-                                }}>
-                                    {stat.value}
-                                </span>
-                                <span style={{
-                                    fontFamily: 'var(--font-mono)',
-                                    fontSize:   '0.46rem',
-                                    color:      'var(--text-disabled)',
-                                    lineHeight: 1,
-                                }}>
-                                    {stat.sub}
-                                </span>
-                            </div>
-                        ))}
-                    </div>
-
-                    {/* ── Recent transitions ── */}
-                    {transitions.length > 0 && (
-                        <div className="flex flex-col gap-2">
-                            {/* Section label */}
-                            <div className="flex items-center gap-2">
-                                <span style={{
-                                    fontFamily:    'var(--font-mono)',
-                                    fontSize:      'clamp(0.46rem, 0.4rem + 0.1vw, 0.52rem)',
-                                    letterSpacing: '0.12em',
-                                    textTransform: 'uppercase',
-                                    color:         'var(--text-disabled)',
-                                    lineHeight:    1,
-                                }}>
-                                    Recent transitions
-                                </span>
-                                <div
-                                    className="flex-1 h-px"
-                                    style={{ background: 'var(--border-subtle)' }}
-                                />
-                            </div>
-
-                            {/* Transition rows */}
-                            {transitions.slice(0, 3).map((t, i) => (
-                                <div
-                                    key={`${t.id}-${i}`}
-                                    className="flex items-start gap-3 px-3.5 py-3 rounded-xl transition-colors duration-150"
-                                    style={{
-                                        background:  i === 0
-                                            ? `${MODE_COLOR[t.to]}06`
-                                            : 'var(--bg-elevated)',
-                                        border:      `1px solid ${i === 0 ? `${MODE_COLOR[t.to]}18` : 'var(--border-subtle)'}`,
-                                    }}
-                                >
-                                    {/* Transition pills — stacked vertically to avoid truncation */}
-                                    <div className="flex items-center gap-1.5 shrink-0 pt-px">
-                                        <ModePill mode={t.from} />
-                                        <ArrowRight
-                                            size={9}
-                                            style={{ color: 'var(--text-disabled)', flexShrink: 0 }}
-                                        />
-                                        <ModePill mode={t.to} />
-                                    </div>
-
-                                    {/* Reason + time */}
-                                    <div className="flex flex-col gap-1.25 flex-1 min-w-0">
-                                        <span
-                                            className="leading-snug line-clamp-2"
-                                            style={{
-                                                fontFamily: 'var(--font-mono)',
-                                                fontSize:   'clamp(0.52rem, 0.46rem + 0.14vw, 0.6rem)',
-                                                color:      'var(--text-secondary)',
-                                                lineHeight: 1.45,
-                                            }}
-                                        >
-                                            {t.reason}
-                                        </span>
-                                        <div className="flex items-center gap-1.5">
-                                            <Clock
-                                                size={9}
-                                                style={{ color: 'var(--text-disabled)', flexShrink: 0 }}
-                                            />
-                                            <span style={{
-                                                fontFamily: 'var(--font-mono)',
-                                                fontSize:   'clamp(0.44rem, 0.38rem + 0.1vw, 0.5rem)',
-                                                color:      'var(--text-disabled)',
-                                                lineHeight: 1,
-                                            }}>
-                                                {fmtRelative(t.triggeredAt)}
-                                            </span>
-                                            {i === 0 && (
-                                                <span
-                                                    className="text-[0.42rem] tracking-[0.08em] uppercase font-bold px-1 py-0.5 rounded-full"
-                                                    style={{
-                                                        background: `${MODE_COLOR[t.to]}14`,
-                                                        color:      MODE_COLOR[t.to],
-                                                        fontFamily: 'var(--font-mono)',
-                                                        border:     `1px solid ${MODE_COLOR[t.to]}28`,
-                                                    }}
-                                                >
-                                                    Latest
-                                                </span>
-                                            )}
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            </div>
-
-            {/* ════════════════════════════════════════════════
-                RIGHT — Mode Controls
-            ════════════════════════════════════════════════ */}
-            <div
-                className="flex flex-col overflow-hidden rounded-2xl"
-                style={{
-                    background: 'var(--bg-raised)',
-                    border:     '1px solid var(--border-default)',
-                    boxShadow:  '0 2px 16px rgba(0,0,0,0.18)',
-                }}
-            >
-                {/* ── Card header ── */}
-                <div
-                    className="flex items-center gap-3 px-5 py-4 shrink-0"
-                    style={{ borderBottom: '1px solid var(--border-subtle)' }}
-                >
-                    <div
-                        className="flex items-center justify-center shrink-0 rounded-xl"
-                        style={{
-                            width:      34,
-                            height:     34,
-                            background: 'rgba(255,255,255,0.05)',
-                            border:     '1px solid var(--border-default)',
-                        }}
-                    >
-                        <Settings2 size={15} strokeWidth={1.8} style={{ color: 'var(--text-muted)' }} />
-                    </div>
-                    <div className="flex flex-col gap-0.75 flex-1 min-w-0">
-                        <p style={{
-                            fontFamily:  'var(--font-display)',
-                            fontSize:    'clamp(0.72rem, 0.64rem + 0.24vw, 0.84rem)',
-                            fontWeight:  700,
-                            color:       'var(--text-primary)',
-                            lineHeight:  1,
-                        }}>
-                            Mode Controls
-                        </p>
-                        <p style={{
-                            fontFamily: 'var(--font-mono)',
-                            fontSize:   'clamp(0.5rem, 0.44rem + 0.14vw, 0.56rem)',
-                            color:      'var(--text-disabled)',
-                            lineHeight: 1,
-                        }}>
-                            Auto-transition settings and manual override
-                        </p>
-                    </div>
-                </div>
-
-                <div className="flex flex-col gap-4 p-5">
-
-                    {/* ── Auto-transition toggle ── */}
-                    <div
-                        className="flex items-center gap-4 px-4 py-4 rounded-2xl transition-all duration-300"
-                        style={{
-                            background: autoTransitionEnabled
-                                ? 'linear-gradient(135deg, rgba(59,158,255,0.08) 0%, rgba(59,158,255,0.03) 100%)'
-                                : 'var(--bg-elevated)',
-                            border: `1px solid ${autoTransitionEnabled
-                                ? 'rgba(59,158,255,0.25)'
-                                : 'var(--border-subtle)'}`,
-                            boxShadow: autoTransitionEnabled
-                                ? '0 0 20px rgba(59,158,255,0.06)'
-                                : 'none',
-                        }}
-                    >
-                        <div
-                            className="flex items-center justify-center shrink-0 rounded-xl transition-all duration-300"
-                            style={{
-                                width:      38,
-                                height:     38,
-                                background: autoTransitionEnabled
-                                    ? 'rgba(59,158,255,0.14)'
-                                    : 'var(--bg-raised)',
-                                border: `1px solid ${autoTransitionEnabled
-                                    ? 'rgba(59,158,255,0.32)'
-                                    : 'var(--border-subtle)'}`,
-                                boxShadow: autoTransitionEnabled
-                                    ? '0 0 12px rgba(59,158,255,0.18)'
-                                    : 'none',
-                            }}
-                        >
-                            <RefreshCw
-                                size={15}
-                                strokeWidth={autoTransitionEnabled ? 2 : 1.6}
-                                style={{
-                                    color:      autoTransitionEnabled
-                                        ? 'var(--accent-primary)'
-                                        : 'var(--text-muted)',
-                                    transition: 'color 300ms ease',
-                                }}
-                            />
-                        </div>
-
-                        <div className="flex flex-col gap-1.25 flex-1 min-w-0">
-                            <p style={{
-                                fontFamily:  'var(--font-display)',
-                                fontSize:    'clamp(0.64rem, 0.58rem + 0.2vw, 0.74rem)',
-                                fontWeight:  700,
-                                color:       'var(--text-primary)',
-                                lineHeight:  1,
-                            }}>
-                                Auto-transition
-                            </p>
-                            <p style={{
-                                fontFamily: 'var(--font-mono)',
-                                fontSize:   'clamp(0.5rem, 0.44rem + 0.13vw, 0.56rem)',
-                                color:      autoTransitionEnabled
-                                    ? 'var(--text-muted)'
-                                    : 'var(--text-disabled)',
-                                lineHeight: 1.4,
-                                transition: 'color 300ms ease',
-                            }}>
-                                {autoTransitionEnabled
-                                    ? 'System switches mode based on thresholds'
-                                    : 'Manual control only — no auto-switch'}
-                            </p>
-                        </div>
-
-                        <Toggle
-                            checked={autoTransitionEnabled}
-                            onChange={setAutoTransition}
-                            color="var(--accent-primary)"
-                        />
-                    </div>
-
-                    {/* ── Manual override block ── */}
-                    {canOverride ? (
-                        <div
-                            className="flex flex-col overflow-hidden rounded-2xl transition-all duration-300"
-                            style={{
-                                border: `1px solid ${overrideOpen
-                                    ? `${targetColor}28`
-                                    : 'var(--border-default)'}`,
-                                boxShadow: overrideOpen
-                                    ? `0 0 20px ${targetColor}08`
-                                    : 'none',
-                            }}
-                        >
-                            {/* Trigger row */}
-                            <button
-                                onClick={() => setOverrideOpen(v => !v)}
-                                aria-expanded={overrideOpen}
-                                className="w-full flex items-center gap-3.5 px-4 py-3.5 transition-colors duration-150"
-                                style={{
-                                    background: overrideOpen
-                                        ? `${targetColor}06`
-                                        : 'var(--bg-elevated)',
-                                    outline: 'none',
-                                }}
-                                onMouseEnter={e => {
-                                    if (!overrideOpen) {
-                                        (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.04)';
-                                    }
-                                }}
-                                onMouseLeave={e => {
-                                    if (!overrideOpen) {
-                                        (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-elevated)';
-                                    }
-                                }}
-                            >
-                                {/* Zap icon */}
-                                <div
-                                    className="flex items-center justify-center shrink-0 rounded-lg transition-all duration-200"
-                                    style={{
-                                        width:      32,
-                                        height:     32,
-                                        background: overrideOpen
-                                            ? `${targetColor}14`
-                                            : 'var(--bg-raised)',
-                                        border: `1px solid ${overrideOpen
-                                            ? `${targetColor}30`
-                                            : 'var(--border-subtle)'}`,
-                                    }}
-                                >
-                                    <Zap
-                                        size={13}
-                                        strokeWidth={overrideOpen ? 2.2 : 1.8}
-                                        style={{
-                                            color:      overrideOpen ? targetColor : 'var(--text-muted)',
-                                            transition: 'color 200ms ease',
-                                        }}
-                                    />
-                                </div>
-
-                                {/* Labels */}
-                                <div className="flex flex-col gap-1.25 flex-1 min-w-0 text-left">
-                                    <p style={{
-                                        fontFamily:  'var(--font-display)',
-                                        fontSize:    'clamp(0.64rem, 0.58rem + 0.18vw, 0.72rem)',
-                                        fontWeight:  700,
-                                        color:       'var(--text-primary)',
-                                        lineHeight:  1,
-                                    }}>
-                                        Manual Override
-                                    </p>
-                                    <p style={{
-                                        fontFamily: 'var(--font-mono)',
-                                        fontSize:   'clamp(0.48rem, 0.42rem + 0.13vw, 0.54rem)',
-                                        color:      'var(--text-muted)',
-                                        lineHeight: 1,
-                                    }}>
-                                        Switch to{' '}
-                                        <strong style={{ color: targetColor, fontWeight: 700 }}>
-                                            {targetMode}
-                                        </strong>
-                                    </p>
-                                </div>
-
-                                {/* Supervisor badge */}
-                                <span
-                                    className="hidden sm:flex items-center text-[0.46rem] tracking-[0.08em] uppercase font-bold px-2 py-0.75 rounded-full shrink-0"
-                                    style={{
-                                        fontFamily:  'var(--font-mono)',
-                                        background:  'rgba(245,197,24,0.1)',
-                                        borderColor: 'rgba(245,197,24,0.28)',
-                                        border:      '1px solid rgba(245,197,24,0.28)',
-                                        color:       '#f5c518',
-                                    }}
-                                >
-                                    Supervisor
-                                </span>
-
-                                <ArrowLeftRight
-                                    size={13}
-                                    style={{
-                                        color:      overrideOpen ? targetColor : 'var(--text-disabled)',
-                                        flexShrink: 0,
-                                        transition: 'color 200ms ease',
-                                    }}
-                                />
-                            </button>
-
-                            {/* Override form */}
-                            {overrideOpen && (
-                                <div
-                                    className="flex flex-col gap-4 px-4 pt-4 pb-4"
-                                    style={{
-                                        borderTop:  `1px solid ${targetColor}18`,
-                                        background: `linear-gradient(180deg, ${targetColor}04 0%, transparent 60%)`,
-                                        animation:  'slide-in-up 160ms ease',
-                                    }}
-                                >
-                                    {/* Framed from → to confirmation */}
-                                    <div
-                                        className="flex items-center gap-2 px-3 py-2.5 rounded-xl"
-                                        style={{
-                                            background: 'var(--bg-elevated)',
-                                            border:     '1px solid var(--border-subtle)',
-                                        }}
-                                    >
-                                        <div
-                                            className="flex items-center justify-center rounded-lg shrink-0"
-                                            style={{
-                                                width:      22,
-                                                height:     22,
-                                                background: `${color}14`,
-                                                border:     `1px solid ${color}28`,
-                                            }}
-                                        >
-                                            <CurrentIcon size={11} strokeWidth={2} style={{ color }} />
-                                        </div>
-                                        <ModePill mode={currentMode} size="md" />
-                                        <ArrowRight
-                                            size={11}
-                                            style={{ color: 'var(--text-disabled)', flexShrink: 0 }}
-                                        />
-                                        <ModePill mode={targetMode} size="md" />
-                                        <div
-                                            className="flex items-center justify-center rounded-lg shrink-0 ml-auto"
-                                            style={{
-                                                width:      22,
-                                                height:     22,
-                                                background: `${targetColor}14`,
-                                                border:     `1px solid ${targetColor}28`,
-                                            }}
-                                        >
-                                            <TargetIcon size={11} strokeWidth={2} style={{ color: targetColor }} />
-                                        </div>
-                                    </div>
-
-                                    {/* Reason textarea */}
-                                    <div className="flex flex-col gap-1.5">
-                                        <label style={{
-                                            fontFamily:    'var(--font-mono)',
-                                            fontSize:      '0.5rem',
-                                            letterSpacing: '0.1em',
-                                            textTransform: 'uppercase',
-                                            color:         'var(--text-muted)',
-                                        }}>
-                                            Reason{' '}
-                                            <span style={{ color: 'var(--severity-high)' }}>*</span>
-                                            {' '}— required for audit trail
-                                        </label>
-                                        <textarea
-                                            autoFocus
-                                            value={overrideReason}
-                                            onChange={e => setOverrideReason(e.target.value)}
-                                            placeholder="Describe the reason for this mode switch…"
-                                            rows={3}
-                                            onKeyDown={e => { if (e.key === 'Enter' && e.metaKey) handleOverride(); }}
-                                            style={{
-                                                width:        '100%',
-                                                padding:      '10px 12px',
-                                                background:   'var(--bg-elevated)',
-                                                border:       `1px solid ${overrideReason.trim()
-                                                    ? `${targetColor}45`
-                                                    : 'var(--border-default)'}`,
-                                                borderRadius: 10,
-                                                fontFamily:   'var(--font-mono)',
-                                                fontSize:     'clamp(0.58rem, 0.52rem + 0.18vw, 0.66rem)',
-                                                lineHeight:   1.55,
-                                                color:        'var(--text-primary)',
-                                                resize:       'none',
-                                                outline:      'none',
-                                                boxSizing:    'border-box',
-                                                transition:   'border-color 180ms ease',
-                                            }}
-                                        />
-                                    </div>
-
-                                    {/* Action buttons */}
-                                    <div className="flex items-center gap-2">
-                                        <Button
-                                            size="sm"
-                                            onClick={handleOverride}
-                                            disabled={!overrideReason.trim()}
-                                            className="flex-1 h-9 rounded-xl disabled:opacity-35 gap-1.5 transition-all duration-150"
-                                            style={{
-                                                fontFamily: 'var(--font-mono)',
-                                                fontSize:   'clamp(0.54rem, 0.48rem + 0.16vw, 0.62rem)',
-                                                fontWeight: 700,
-                                                background: overrideReason.trim()
-                                                    ? `${targetColor}18`
-                                                    : 'transparent',
-                                                border:     `1px solid ${overrideReason.trim()
-                                                    ? `${targetColor}45`
-                                                    : 'var(--border-default)'}`,
-                                                color:      overrideReason.trim()
-                                                    ? targetColor
-                                                    : 'var(--text-disabled)',
-                                                boxShadow:  overrideReason.trim()
-                                                    ? `0 0 14px ${targetColor}18`
-                                                    : 'none',
-                                            }}
-                                        >
-                                            <ArrowLeftRight size={11} strokeWidth={2.5} />
-                                            Confirm Override
-                                        </Button>
-                                        <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            onClick={() => { setOverrideOpen(false); setOverrideReason(''); }}
-                                            className="h-9 px-4 rounded-xl"
-                                            style={{
-                                                fontFamily:  'var(--font-mono)',
-                                                fontSize:    'clamp(0.54rem, 0.48rem + 0.16vw, 0.62rem)',
-                                                color:       'var(--text-muted)',
-                                                background:  'rgba(255,255,255,0.04)',
-                                                border:      '1px solid var(--border-subtle)',
-                                            }}
-                                        >
-                                            Cancel
-                                        </Button>
-                                    </div>
-
-                                    <p style={{
-                                        fontFamily:    'var(--font-mono)',
-                                        fontSize:      '0.46rem',
-                                        letterSpacing: '0.04em',
-                                        color:         'var(--text-disabled)',
-                                        textAlign:     'center',
-                                    }}>
-                                        ⌘↵ to confirm
-                                    </p>
-                                </div>
-                            )}
-                        </div>
-                    ) : (
-                        /* ── No-permission state ── */
-                        <div
-                            className="flex items-center gap-3.5 px-4 py-4 rounded-2xl"
-                            style={{
-                                background: 'var(--bg-elevated)',
-                                border:     '1px solid var(--border-subtle)',
-                            }}
-                        >
-                            <div
-                                className="flex items-center justify-center shrink-0 rounded-xl"
-                                style={{
-                                    width:      36,
-                                    height:     36,
-                                    background: 'rgba(255,255,255,0.03)',
-                                    border:     '1px solid var(--border-subtle)',
-                                }}
-                            >
-                                <Zap
-                                    size={15}
-                                    strokeWidth={1.6}
-                                    style={{ color: 'var(--text-disabled)' }}
-                                />
-                            </div>
-                            <div className="flex flex-col gap-1">
-                                <p style={{
-                                    fontFamily:  'var(--font-display)',
-                                    fontSize:    'clamp(0.62rem, 0.56rem + 0.18vw, 0.72rem)',
-                                    fontWeight:  600,
-                                    color:       'var(--text-secondary)',
-                                    lineHeight:  1,
-                                }}>
-                                    Manual Override
-                                </p>
-                                <p style={{
-                                    fontFamily: 'var(--font-mono)',
-                                    fontSize:   'clamp(0.5rem, 0.44rem + 0.13vw, 0.56rem)',
-                                    color:      'var(--text-disabled)',
-                                    lineHeight: 1.35,
-                                }}>
-                                    Requires supervisor access to switch modes
-                                </p>
-                            </div>
-                            <span
-                                className="ml-auto text-[0.44rem] tracking-[0.08em] uppercase font-bold px-2 py-0.75 rounded-full shrink-0"
-                                style={{
-                                    fontFamily:  'var(--font-mono)',
-                                    background:  'rgba(255,255,255,0.04)',
-                                    border:      '1px solid var(--border-subtle)',
-                                    color:       'var(--text-disabled)',
-                                }}
-                            >
-                                Locked
-                            </span>
-                        </div>
-                    )}
-                </div>
-            </div>
-        </div>
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TAB 2: THRESHOLDS
-// ─────────────────────────────────────────────────────────────────────────────
-
-const NUMERIC_FIELDS = [
-    { key: 'trafficVolume' as const, label: 'Traffic Volume', hint: 'Switches to Human-Validated when flow exceeds this', icon: Gauge, min: 500, max: 10_000, step: 500, unit: 'veh/h', danger: (v: number) => v >= 8000 },
-    { key: 'aiConfidenceMin' as const, label: 'Min AI Confidence', hint: 'Drops to Human-Validated below this confidence level', icon: Brain, min: 10, max: 95, step: 5, unit: '%', danger: (v: number) => v >= 85 },
-];
-const BOOL_FIELDS = [
-    { key: 'incidentActive'  as const, label: 'Active Incident',    hint: 'Force HV when any incident is active',      icon: AlertTriangle, color: 'var(--severity-high)'     },
-    { key: 'weatherImpact'   as const, label: 'Weather Impact',     hint: 'Force HV during adverse weather',            icon: CloudRain,     color: 'var(--severity-medium)'   },
-    { key: 'eventActive'     as const, label: 'Scheduled Event',    hint: 'Force HV during planned city events',        icon: CalendarDays,  color: 'var(--accent-primary)'    },
-    { key: 'emergencyActive' as const, label: 'Emergency Declared', hint: 'Always force HV — overrides all thresholds', icon: Siren,         color: 'var(--severity-critical)' },
+const AGENCY_WORKSPACES: AgencyWorkspace[] = [
+    {
+        id: "traffic_control", label: "Traffic Control", shortLabel: "Traffic",
+        description: "Manages signal corridors, AI timing policies, and network-wide traffic flow",
+        color: "text-cyan-400", darkColor: "text-cyan-300",
+        bg: "bg-cyan-500/10", border: "border-cyan-500/35",
+        icon: Signal, aiMode: "assisted", operatorOnDuty: "Kamau N.",
+        jurisdiction: ["Signal corridors", "PSV priority lanes", "Emergency routing"],
+        pendingActions: 3, lastActivity: "15:44",
+    },
+    {
+        id: "psv_operations", label: "PSV Operations", shortLabel: "PSV Ops",
+        description: "Controls PSV fleet routing, pre-trip guidance, and operator dispatching",
+        color: "text-amber-400", darkColor: "text-amber-300",
+        bg: "bg-amber-500/10", border: "border-amber-500/35",
+        icon: Bus, aiMode: "operator", operatorOnDuty: "Wangari J.",
+        jurisdiction: ["Route assignments", "Pre-trip guidance", "Fleet positioning"],
+        pendingActions: 2, lastActivity: "15:38",
+    },
+    {
+        id: "urban_planning", label: "Urban Planning", shortLabel: "Planning",
+        description: "Reviews infrastructure insights, phase roadmap, and long-term corridor planning",
+        color: "text-violet-400", darkColor: "text-violet-300",
+        bg: "bg-violet-500/10", border: "border-violet-500/35",
+        icon: Building2, aiMode: "disabled", operatorOnDuty: "Achieng M.",
+        jurisdiction: ["Phase roadmap", "Infra studies", "Corridor design"],
+        pendingActions: 1, lastActivity: "15:31",
+    },
+    {
+        id: "enforcement", label: "Enforcement", shortLabel: "Enforce",
+        description: "Monitors compliance, manages deviation tiers, and coordinates regulatory actions",
+        color: "text-red-400", darkColor: "text-red-300",
+        bg: "bg-red-500/10", border: "border-red-500/35",
+        icon: ShieldAlert, aiMode: "assisted", operatorOnDuty: "Otieno M.",
+        jurisdiction: ["Deviation tracking", "Tier escalation", "Compliance reports"],
+        pendingActions: 2, lastActivity: "15:39",
+    },
 ];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ThresholdsTab — redesigned
-// Drop-in replacement. All props, state, and API call logic are unchanged.
-// Only the JSX + style layer is updated.
-// ─────────────────────────────────────────────────────────────────────────────
+const CONTROL_MODULES: ControlModule[] = [
+    { id: "MOD-01", agency: "traffic_control", name: "Signal Timing Engine", description: "AI-managed PSV green phase optimization across all active corridors", status: "active", aiControlled: true,  lastUpdated: "15:44", metrics: [{ label: "Active corridors", value: "3/5", color: "text-cyan-400" }, { label: "Priority active", value: "3", color: "text-emerald-400" }, { label: "Avg PSV flow", value: "45/hr", color: "text-white/60" }] },
+    { id: "MOD-02", agency: "traffic_control", name: "Congestion Predictor",  description: "30–120 min forward forecast for all PSV corridors", status: "active", aiControlled: true,  lastUpdated: "15:40", metrics: [{ label: "Routes monitored", value: "6", color: "text-cyan-400" }, { label: "Critical forecast", value: "2", color: "text-red-400" }, { label: "Accuracy",      value: "84%", color: "text-emerald-400" }] },
+    { id: "MOD-03", agency: "psv_operations",  name: "Pre-Trip Advisor",     description: "AI guidance queue for PSV drivers before departure", status: "active", aiControlled: true,  lastUpdated: "15:38", metrics: [{ label: "Queued guidance",  value: "4", color: "text-amber-400" }, { label: "Acceptance rate", value: "68%", color: "text-white/60" }, { label: "Time saved", value: "44 min", color: "text-emerald-400" }] },
+    { id: "MOD-04", agency: "psv_operations",  name: "Fleet Dispatcher",     description: "Vehicle assignment and positioning based on route demand", status: "standby", aiControlled: false, lastUpdated: "15:10", metrics: [{ label: "Active PSVs", value: "55", color: "text-amber-400" }, { label: "Off-route",    value: "5", color: "text-red-400" }, { label: "On schedule", value: "72%", color: "text-white/60" }] },
+    { id: "MOD-05", agency: "enforcement",     name: "Geofence Monitor",     description: "Real-time PSV corridor boundary enforcement", status: "active", aiControlled: true,  lastUpdated: "15:39", metrics: [{ label: "Active geofences", value: "6", color: "text-red-400" }, { label: "Open breaches", value: "2", color: "text-red-400" }, { label: "Auto-resolved", value: "3", color: "text-emerald-400" }] },
+    { id: "MOD-06", agency: "enforcement",     name: "Compliance Tracker",   description: "Driver and operator compliance scoring and reporting", status: "active", aiControlled: true,  lastUpdated: "15:35", metrics: [{ label: "Avg compliance", value: "79%", color: "text-amber-400" }, { label: "Flagged today", value: "7", color: "text-red-400" }, { label: "Reports pending", value: "2", color: "text-white/60" }] },
+    { id: "MOD-07", agency: "urban_planning",  name: "Infra Intelligence",   description: "Identifies bottlenecks and recommends infrastructure upgrades", status: "active", aiControlled: true,  lastUpdated: "15:30", metrics: [{ label: "Open findings", value: "4", color: "text-violet-400" }, { label: "Escalated",    value: "1", color: "text-amber-400" }, { label: "Phase 3 items", value: "3", color: "text-white/60" }] },
+    { id: "MOD-08", agency: "urban_planning",  name: "Phase Planner",        description: "Rollout roadmap and readiness tracking for system phases", status: "active", aiControlled: false, lastUpdated: "15:00", metrics: [{ label: "Current phase", value: "P2", color: "text-cyan-400" }, { label: "P3 readiness", value: "62%", color: "text-violet-400" }, { label: "Routes in P3", value: "0/6", color: "text-white/60" }] },
+];
 
-function ThresholdsTab({
-                           thresholds,
-                           onSaved,
-                       }: {
-    thresholds: ModeThresholds;
-    onSaved:    (t: ModeThresholds) => void;
-}) {
-    const [local,  setLocal]  = useState({ ...thresholds });
-    const [saving, setSaving] = useState(false);
-    const [saved,  setSaved]  = useState(false);
-    const [error,  setError]  = useState<string | null>(null);
+const SIGNAL_CORRIDORS: SignalCorridor[] = [
+    { id: "SC-01", name: "Thika Rd",     routeId: "R-23", signals: 7, mode: "ai_managed", avgGreenTime: 42, aiRecommendedGreen: 58, cycleLength: 90,  psvThroughput: 38, priorityActive: true,  lastAdjusted: "15:41" },
+    { id: "SC-02", name: "Jogoo Rd",     routeId: "R-11", signals: 5, mode: "fixed",      avgGreenTime: 35, aiRecommendedGreen: 52, cycleLength: 85,  psvThroughput: 21, priorityActive: false, lastAdjusted: "14:20", lockedBy: "traffic_control" },
+    { id: "SC-03", name: "Ngong Rd",     routeId: "R-07", signals: 4, mode: "manual",     avgGreenTime: 38, aiRecommendedGreen: 44, cycleLength: 80,  psvThroughput: 29, priorityActive: false, lastAdjusted: "15:10" },
+    { id: "SC-04", name: "Mombasa Rd",   routeId: "R-44", signals: 6, mode: "ai_managed", avgGreenTime: 44, aiRecommendedGreen: 46, cycleLength: 95,  psvThroughput: 45, priorityActive: true,  lastAdjusted: "15:38" },
+    { id: "SC-05", name: "Waiyaki Way",  routeId: "R-56", signals: 3, mode: "ai_managed", avgGreenTime: 40, aiRecommendedGreen: 40, cycleLength: 75,  psvThroughput: 52, priorityActive: true,  lastAdjusted: "15:44" },
+];
 
-    useEffect(() => { startTransition(() => setLocal({ ...thresholds })); }, [thresholds]);
-    const isDirty = JSON.stringify(local) !== JSON.stringify(thresholds);
+const ROUTE_MODES: RouteMode[] = [
+    { id: "R-23", name: "Route 23", corridor: "Thika Rd",    origin: "CBD", destination: "Thika Town", status: "critical", aiRoutingActive: true,  signalMode: "ai_managed", complianceRate: 74, efficiency: 48, activeVehicles: 14, totalVehicles: 18, avgDelay: 22, phase: 1, governedBy: ["traffic_control","psv_operations","enforcement"], aiLocked: false },
+    { id: "R-07", name: "Route 7",  corridor: "Ngong Rd",    origin: "CBD", destination: "Karen",       status: "delayed",  aiRoutingActive: true,  signalMode: "manual",     complianceRate: 88, efficiency: 68, activeVehicles: 9,  totalVehicles: 12, avgDelay: 11, phase: 2, governedBy: ["traffic_control","psv_operations"],                  aiLocked: false },
+    { id: "R-44", name: "Route 44", corridor: "Mombasa Rd",  origin: "CBD", destination: "JKIA",        status: "normal",   aiRoutingActive: true,  signalMode: "ai_managed", complianceRate: 94, efficiency: 82, activeVehicles: 11, totalVehicles: 11, avgDelay: 4,  phase: 2, governedBy: ["traffic_control","psv_operations"],                  aiLocked: false },
+    { id: "R-11", name: "Route 11", corridor: "Jogoo Rd",    origin: "CBD", destination: "Eastlands",   status: "critical", aiRoutingActive: false, signalMode: "fixed",      complianceRate: 61, efficiency: 41, activeVehicles: 7,  totalVehicles: 15, avgDelay: 28, phase: 1, governedBy: ["traffic_control","psv_operations","enforcement"], aiLocked: true  },
+    { id: "R-56", name: "Route 56", corridor: "Waiyaki Way", origin: "CBD", destination: "Westlands",   status: "optimal",  aiRoutingActive: true,  signalMode: "ai_managed", complianceRate: 99, efficiency: 96, activeVehicles: 8,  totalVehicles: 8,  avgDelay: 0,  phase: 2, governedBy: ["traffic_control","psv_operations"],                  aiLocked: false },
+    { id: "R-31", name: "Route 31", corridor: "Uhuru Hwy",   origin: "CBD", destination: "Langata",     status: "delayed",  aiRoutingActive: true,  signalMode: "manual",     complianceRate: 81, efficiency: 61, activeVehicles: 6,  totalVehicles: 10, avgDelay: 14, phase: 2, governedBy: ["traffic_control","psv_operations"],                  aiLocked: false },
+];
 
-    const save = async () => {
-        setSaving(true); setError(null);
-        try {
-            const res = await fetch('/api/modes', {
-                method:  'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body:    JSON.stringify({ thresholds: local }),
-            });
-            if (!res.ok) {
-                setError(`HTTP ${res.status}`);
-                return;
-            }
-            onSaved(local);
-            setSaved(true);
-            setTimeout(() => setSaved(false), 2500);
-        } catch (e) {
-            setError((e as Error).message);
-        } finally {
-            setSaving(false);
-        }
-    };
+const PHASE_MODULES: PhaseModule[] = [
+    {
+        phase: 1, label: "Phase 1 — Pilot Tracking", status: "active",
+        description: "Opt-in pilot on selected corridors. Core tracking and analytics only. No automated routing or signal control.",
+        routes: 2, completion: 100, targetDate: "Completed",
+        features: ["Live PSV tracking", "Route performance analytics", "Basic compliance monitoring", "Manual signal control"],
+        aiCapabilities: ["Anomaly detection", "Congestion detection", "Deviation alerts"],
+    },
+    {
+        phase: 2, label: "Phase 2 — AI Recommendations", status: "active",
+        description: "Policy-backed adoption. AI generates route and signal recommendations requiring operator approval. Pre-trip guidance active.",
+        routes: 4, completion: 68, targetDate: "Q3 2025",
+        features: ["AI route recommendations", "Signal priority corridors", "Pre-trip driver guidance", "Compliance enforcement tiers", "Infrastructure insights"],
+        aiCapabilities: ["Route optimization", "Signal timing suggestions", "Predictive congestion", "Automated soft enforcement"],
+    },
+    {
+        phase: 3, label: "Phase 3 — Full Automation", status: "pending",
+        description: "City-wide expansion. AI executes within policy thresholds autonomously. Signal automation active. Infrastructure upgrades integrated.",
+        routes: 0, completion: 0, targetDate: "Q1 2026",
+        features: ["Autonomous signal control", "Dynamic rerouting", "Infrastructure integration", "Cross-agency data sharing", "All 100+ routes"],
+        aiCapabilities: ["Full signal automation", "Dynamic rerouting (incidents)", "Predictive infrastructure alerts", "Autonomous compliance scoring"],
+    },
+];
 
-    return (
-        <div className="flex flex-col gap-5">
+const CROSS_AGENCY: CrossAgencyItem[] = [
+    { id: "CA-001", type: "conflict",      agencies: ["traffic_control","enforcement"],  subject: "Jogoo Rd Fixed Override", description: "SC-02 fixed mode set by traffic control is delaying enforcement geofence effectiveness on R-11", status: "active",  priority: "high",   timestamp: "15:20" },
+    { id: "CA-002", type: "coordination",  agencies: ["psv_operations","traffic_control"],subject: "Route 7 Pre-Trip Push",   description: "PSV Ops needs traffic signal clearance before pushing Mbagathi Rd bypass to R-07 drivers",  status: "pending", priority: "high",   timestamp: "15:38" },
+    { id: "CA-003", type: "handoff",       agencies: ["traffic_control","urban_planning"],subject: "Pangani Roundabout Study", description: "Traffic ops has escalated Pangani roundabout findings to urban planning Phase 3 roadmap",       status: "resolved",priority: "medium", timestamp: "15:31" },
+    { id: "CA-004", type: "coordination",  agencies: ["enforcement","psv_operations"],   subject: "Route 11 Deviation Pattern",description: "Enforcement escalation for 3 repeat-deviation vehicles requires PSV Ops fleet review",         status: "pending", priority: "high",   timestamp: "15:41" },
+];
 
-            {/* ══════════════════════════════════════════════════════════
-                MAIN GRID — Sliders left · Conditions right
-            ══════════════════════════════════════════════════════════ */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+/* ─────────────────────────────────────────────
+   CONFIG
+───────────────────────────────────────────── */
+const agencyCfg: Record<Agency, { label: string; color: string; bg: string; border: string; icon: React.ElementType }> = {
+    traffic_control: { label: "Traffic Control", color: "text-cyan-400",   bg: "bg-cyan-500/10",   border: "border-cyan-500/35",   icon: Signal },
+    psv_operations:  { label: "PSV Operations",  color: "text-amber-400",  bg: "bg-amber-500/10",  border: "border-amber-500/35",  icon: Bus },
+    urban_planning:  { label: "Urban Planning",  color: "text-violet-400", bg: "bg-violet-500/10", border: "border-violet-500/35", icon: Building2 },
+    enforcement:     { label: "Enforcement",     color: "text-red-400",    bg: "bg-red-500/10",    border: "border-red-500/35",    icon: ShieldAlert },
+};
 
-                {/* ── Numeric Thresholds ── */}
-                <div
-                    className="flex flex-col overflow-hidden rounded-2xl"
-                    style={{
-                        background:  'var(--bg-raised)',
-                        border:      '1px solid var(--border-default)',
-                        boxShadow:   '0 2px 16px rgba(0,0,0,0.18)',
-                    }}
-                >
-                    {/* Card header */}
-                    <div
-                        className="flex items-center gap-3 px-5 py-4"
-                        style={{ borderBottom: '1px solid var(--border-subtle)' }}
-                    >
-                        <div
-                            className="flex items-center justify-center shrink-0 rounded-xl"
-                            style={{
-                                width:      34,
-                                height:     34,
-                                background: 'rgba(59,158,255,0.10)',
-                                border:     '1px solid rgba(59,158,255,0.22)',
-                            }}
-                        >
-                            <Gauge size={15} strokeWidth={1.8} style={{ color: 'var(--accent-primary)' }} />
-                        </div>
-                        <div className="flex flex-col gap-0.75 flex-1 min-w-0">
-                            <p style={{
-                                fontFamily:  'var(--font-display)',
-                                fontSize:    'clamp(0.72rem, 0.64rem + 0.24vw, 0.84rem)',
-                                fontWeight:  700,
-                                color:       'var(--text-primary)',
-                                lineHeight:  1,
-                            }}>
-                                Numeric Thresholds
-                            </p>
-                            <p style={{
-                                fontFamily: 'var(--font-mono)',
-                                fontSize:   'clamp(0.5rem, 0.44rem + 0.14vw, 0.56rem)',
-                                color:      'var(--text-disabled)',
-                                lineHeight: 1,
-                            }}>
-                                Quantitative trigger values for auto-transition
-                            </p>
-                        </div>
-                    </div>
+const aiModeCfg: Record<AgencyAIMode, { label: string; color: string; bg: string; border: string; desc: string }> = {
+    full_auto:  { label: "Full Auto",       color: "text-emerald-400", bg: "bg-emerald-500/10", border: "border-emerald-500/35", desc: "AI executes autonomously within policy" },
+    assisted:   { label: "AI Assisted",     color: "text-cyan-400",    bg: "bg-cyan-500/10",    border: "border-cyan-500/35",    desc: "AI recommends; auto-execute within thresholds" },
+    operator:   { label: "Operator Ctrl",   color: "text-amber-400",   bg: "bg-amber-500/10",   border: "border-amber-500/35",   desc: "All AI actions require manual approval" },
+    disabled:   { label: "AI Disabled",     color: "text-white/35",    bg: "bg-white/5",        border: "border-white/15",       desc: "No AI involvement; fully manual" },
+};
 
-                    {/* Slider fields */}
-                    <div className="flex flex-col gap-0 divide-y" style={{ '--tw-divide-opacity': 1 } as React.CSSProperties}>
-                        {NUMERIC_FIELDS.map((f, idx) => {
-                            const val      = local[f.key] as number;
-                            const isDanger = f.danger(val);
-                            const Icon     = f.icon;
-                            const pct      = ((val - f.min) / (f.max - f.min)) * 100;
-                            const accentColor = isDanger ? 'var(--severity-high)' : 'var(--accent-primary)';
+const signalModeCfg: Record<SignalMode, { label: string; color: string; icon: React.ElementType }> = {
+    ai_managed: { label: "AI Managed", color: "text-cyan-400",  icon: Brain },
+    manual:     { label: "Manual",     color: "text-amber-400", icon: Edit3 },
+    fixed:      { label: "Fixed",      color: "text-white/40",  icon: Lock },
+    emergency:  { label: "Emergency",  color: "text-red-400",   icon: Siren },
+};
 
-                            return (
-                                <div
-                                    key={f.key}
-                                    className="flex flex-col gap-4 px-5 py-5 transition-colors duration-300"
-                                    style={{
-                                        background:  isDanger
-                                            ? 'rgba(255,136,0,0.025)'
-                                            : idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.012)',
-                                        borderColor: 'var(--border-subtle)',
-                                    }}
-                                >
-                                    {/* Label row */}
-                                    <div className="flex items-center justify-between gap-3">
-                                        <div className="flex items-center gap-2.5 min-w-0">
-                                            <Icon
-                                                size={14}
-                                                strokeWidth={isDanger ? 2.5 : 1.8}
-                                                style={{
-                                                    color:      accentColor,
-                                                    flexShrink: 0,
-                                                    transition: 'color 300ms ease',
-                                                }}
-                                            />
-                                            <div className="flex flex-col gap-0.75 min-w-0">
-                                                <span style={{
-                                                    fontFamily: 'var(--font-display)',
-                                                    fontSize:   'clamp(0.66rem, 0.6rem + 0.2vw, 0.76rem)',
-                                                    fontWeight: 600,
-                                                    color:      'var(--text-primary)',
-                                                    lineHeight: 1,
-                                                }}>
-                                                    {f.label}
-                                                </span>
-                                                <span style={{
-                                                    fontFamily: 'var(--font-mono)',
-                                                    fontSize:   'clamp(0.48rem, 0.42rem + 0.12vw, 0.54rem)',
-                                                    color:      'var(--text-disabled)',
-                                                    lineHeight: 1,
-                                                }}>
-                                                    {f.hint}
-                                                </span>
-                                            </div>
-                                        </div>
+const routeStatusCfg: Record<RouteStatus, { label: string; color: string; bar: string; dot: string }> = {
+    critical: { label: "Critical", color: "text-red-400",     bar: "bg-red-500",     dot: "bg-red-400" },
+    delayed:  { label: "Delayed",  color: "text-amber-400",   bar: "bg-amber-500",   dot: "bg-amber-400" },
+    normal:   { label: "Normal",   color: "text-yellow-400",  bar: "bg-yellow-500",  dot: "bg-yellow-400" },
+    optimal:  { label: "Optimal",  color: "text-emerald-400", bar: "bg-emerald-500", dot: "bg-emerald-400" },
+};
 
-                                        {/* Value badge — single accent color, not double orange */}
-                                        <div
-                                            className="shrink-0 flex items-baseline gap-0.75 px-3 py-1.5 rounded-lg tabular-nums"
-                                            style={{
-                                                background:  isDanger
-                                                    ? 'rgba(255,136,0,0.10)'
-                                                    : 'rgba(59,158,255,0.08)',
-                                                border:      `1px solid ${isDanger ? 'rgba(255,136,0,0.28)' : 'rgba(59,158,255,0.2)'}`,
-                                                transition:  'all 300ms ease',
-                                            }}
-                                        >
-                                            <span style={{
-                                                fontFamily: 'var(--font-mono)',
-                                                fontSize:   'clamp(0.72rem, 0.64rem + 0.2vw, 0.84rem)',
-                                                fontWeight: 800,
-                                                color:      accentColor,
-                                                lineHeight: 1,
-                                                transition: 'color 300ms ease',
-                                            }}>
-                                                {val.toLocaleString()}
-                                            </span>
-                                            <span style={{
-                                                fontFamily: 'var(--font-mono)',
-                                                fontSize:   'clamp(0.44rem, 0.38rem + 0.1vw, 0.5rem)',
-                                                color:      isDanger ? 'rgba(255,136,0,0.65)' : 'rgba(59,158,255,0.65)',
-                                                lineHeight: 1,
-                                            }}>
-                                                {f.unit}
-                                            </span>
-                                        </div>
-                                    </div>
+const phaseCfg: Record<SystemPhase, { color: string; bg: string; border: string }> = {
+    1: { color: "text-amber-400",   bg: "bg-amber-500/10",   border: "border-amber-500/30" },
+    2: { color: "text-cyan-400",    bg: "bg-cyan-500/10",    border: "border-cyan-500/30" },
+    3: { color: "text-violet-400",  bg: "bg-violet-500/10",  border: "border-violet-500/30" },
+};
 
-                                    {/* Slider + range labels */}
-                                    <div className="flex flex-col gap-2">
-                                        <Slider
-                                            min={f.min}
-                                            max={f.max}
-                                            step={f.step}
-                                            value={[val]}
-                                            onValueChange={([v]) => setLocal(p => ({ ...p, [f.key]: v }))}
-                                            className="w-full"
-                                        />
-                                        <div className="flex items-center justify-between">
-                                            <span style={{
-                                                fontFamily: 'var(--font-mono)',
-                                                fontSize:   'clamp(0.44rem, 0.38rem + 0.1vw, 0.5rem)',
-                                                color:      'var(--text-disabled)',
-                                            }}>
-                                                {f.min.toLocaleString()} {f.unit}
-                                            </span>
-                                            {/* Midpoint fill indicator */}
-                                            <span style={{
-                                                fontFamily: 'var(--font-mono)',
-                                                fontSize:   '0.44rem',
-                                                color:      'var(--text-disabled)',
-                                            }}>
-                                                {Math.round(pct)}%
-                                            </span>
-                                            <span style={{
-                                                fontFamily: 'var(--font-mono)',
-                                                fontSize:   'clamp(0.44rem, 0.38rem + 0.1vw, 0.5rem)',
-                                                color:      'var(--text-disabled)',
-                                            }}>
-                                                {f.max.toLocaleString()} {f.unit}
-                                            </span>
-                                        </div>
-                                    </div>
+const modulusStatusCfg = {
+    active:  { label: "Active",  color: "text-emerald-400", dot: "bg-emerald-400" },
+    standby: { label: "Standby", color: "text-amber-400",   dot: "bg-amber-400" },
+    paused:  { label: "Paused",  color: "text-white/35",    dot: "bg-white/30" },
+    error:   { label: "Error",   color: "text-red-400",     dot: "bg-red-400" },
+};
 
-                                    {/* Danger warning strip — only appears when triggered */}
-                                    {isDanger && (
-                                        <div
-                                            className="flex items-center gap-2 px-3 py-2 rounded-lg"
-                                            style={{
-                                                background: 'rgba(255,136,0,0.06)',
-                                                border:     '1px solid rgba(255,136,0,0.18)',
-                                                animation:  'slide-in-up 200ms ease',
-                                            }}
-                                        >
-                                            <AlertTriangle size={11} strokeWidth={2} style={{ color: 'var(--severity-high)', flexShrink: 0 }} />
-                                            <span style={{
-                                                fontFamily: 'var(--font-mono)',
-                                                fontSize:   'clamp(0.48rem, 0.42rem + 0.12vw, 0.54rem)',
-                                                color:      'var(--severity-high)',
-                                                lineHeight: 1.4,
-                                            }}>
-                                                Value is in the high-risk range — verify intent before saving
-                                            </span>
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
-
-                {/* ── Condition Overrides ── */}
-                <div
-                    className="flex flex-col overflow-hidden rounded-2xl"
-                    style={{
-                        background: 'var(--bg-raised)',
-                        border:     '1px solid var(--border-default)',
-                        boxShadow:  '0 2px 16px rgba(0,0,0,0.18)',
-                    }}
-                >
-                    {/* Card header */}
-                    <div
-                        className="flex items-center gap-3 px-5 py-4"
-                        style={{ borderBottom: '1px solid var(--border-subtle)' }}
-                    >
-                        <div
-                            className="flex items-center justify-center shrink-0 rounded-xl"
-                            style={{
-                                width:      34,
-                                height:     34,
-                                background: 'rgba(255,136,0,0.10)',
-                                border:     '1px solid rgba(255,136,0,0.22)',
-                            }}
-                        >
-                            <AlertTriangle size={15} strokeWidth={1.8} style={{ color: 'var(--severity-high)' }} />
-                        </div>
-                        <div className="flex flex-col gap-0.75 flex-1 min-w-0">
-                            <p style={{
-                                fontFamily:  'var(--font-display)',
-                                fontSize:    'clamp(0.72rem, 0.64rem + 0.24vw, 0.84rem)',
-                                fontWeight:  700,
-                                color:       'var(--text-primary)',
-                                lineHeight:  1,
-                            }}>
-                                Condition Overrides
-                            </p>
-                            <p style={{
-                                fontFamily: 'var(--font-mono)',
-                                fontSize:   'clamp(0.5rem, 0.44rem + 0.14vw, 0.56rem)',
-                                color:      'var(--text-disabled)',
-                                lineHeight: 1,
-                            }}>
-                                Force Human-Validated when these conditions are active
-                            </p>
-                        </div>
-                    </div>
-
-                    {/* Condition rows */}
-                    <div className="flex flex-col gap-0 divide-y p-3" style={{ '--tw-divide-opacity': 1 } as React.CSSProperties}>
-                        {BOOL_FIELDS.map(f => {
-                            const val    = local[f.key] as boolean;
-                            const Icon   = f.icon;
-                            const isLast = BOOL_FIELDS[BOOL_FIELDS.length - 1].key === f.key;
-
-                            return (
-                                <div
-                                    key={f.key}
-                                    className="flex items-center gap-3.5 px-3 py-3.5 rounded-xl transition-all duration-300 cursor-pointer group"
-                                    onClick={() => setLocal(p => ({ ...p, [f.key]: !val }))}
-                                    style={{
-                                        background:   val
-                                            ? `linear-gradient(135deg, ${f.color}0a 0%, ${f.color}04 100%)`
-                                            : 'transparent',
-                                        border:       `1px solid ${val ? `${f.color}22` : 'transparent'}`,
-                                        marginBottom: isLast ? 0 : 4,
-                                    }}
-                                >
-                                    {/* Icon box */}
-                                    <div
-                                        className="flex items-center justify-center shrink-0 rounded-xl transition-all duration-300"
-                                        style={{
-                                            width:      38,
-                                            height:     38,
-                                            background: val
-                                                ? `${f.color}16`
-                                                : 'var(--bg-elevated)',
-                                            border:     `1px solid ${val ? `${f.color}32` : 'var(--border-subtle)'}`,
-                                            boxShadow:  val ? `0 0 12px ${f.color}20` : 'none',
-                                        }}
-                                    >
-                                        <Icon
-                                            size={16}
-                                            strokeWidth={val ? 2.2 : 1.6}
-                                            style={{
-                                                color:      val ? f.color : 'var(--text-muted)',
-                                                transition: 'all 300ms ease',
-                                            }}
-                                        />
-                                    </div>
-
-                                    {/* Text */}
-                                    <div className="flex flex-col gap-1.25 flex-1 min-w-0">
-                                        <p style={{
-                                            fontFamily:  'var(--font-display)',
-                                            fontSize:    'clamp(0.64rem, 0.58rem + 0.18vw, 0.74rem)',
-                                            fontWeight:  600,
-                                            color:       val ? 'var(--text-primary)' : 'var(--text-secondary)',
-                                            lineHeight:  1,
-                                            transition:  'color 300ms ease',
-                                        }}>
-                                            {f.label}
-                                        </p>
-                                        <p style={{
-                                            fontFamily: 'var(--font-mono)',
-                                            fontSize:   'clamp(0.48rem, 0.42rem + 0.12vw, 0.54rem)',
-                                            color:      'var(--text-disabled)',
-                                            lineHeight: 1.4,
-                                        }}>
-                                            {f.hint}
-                                        </p>
-                                    </div>
-
-                                    {/* Status chip + toggle */}
-                                    <div className="flex items-center gap-2 shrink-0">
-                                        {/* Active label — only when on */}
-                                        {val && (
-                                            <span
-                                                className="text-[0.44rem] tracking-widest uppercase font-bold px-1.5 py-0.5 rounded-full"
-                                                style={{
-                                                    background: `${f.color}14`,
-                                                    color:      f.color,
-                                                    fontFamily: 'var(--font-mono)',
-                                                    border:     `1px solid ${f.color}28`,
-                                                    animation:  'slide-in-up 200ms ease',
-                                                }}
-                                            >
-                                                Active
-                                            </span>
-                                        )}
-                                        <Toggle
-                                            checked={val}
-                                            onChange={v => setLocal(p => ({ ...p, [f.key]: v }))}
-                                            color={f.color}
-                                        />
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-
-                    {/* Active count footer */}
-                    {(() => {
-                        const activeCount = BOOL_FIELDS.filter(f => local[f.key]).length;
-                        return activeCount > 0 ? (
-                            <div
-                                className="mx-3 mb-3 flex items-center gap-2 px-3 py-2.5 rounded-xl"
-                                style={{
-                                    background: 'rgba(255,136,0,0.05)',
-                                    border:     '1px solid rgba(255,136,0,0.14)',
-                                }}
-                            >
-                                <div className="w-1.5 h-1.5 rounded-full shrink-0 animate-pulse"
-                                     style={{ background: 'var(--severity-high)' }} />
-                                <span style={{
-                                    fontFamily: 'var(--font-mono)',
-                                    fontSize:   'clamp(0.5rem, 0.44rem + 0.12vw, 0.56rem)',
-                                    color:      'var(--severity-high)',
-                                    lineHeight: 1,
-                                }}>
-                                    {activeCount} override{activeCount !== 1 ? 's' : ''} forcing Human-Validated mode
-                                </span>
-                            </div>
-                        ) : null;
-                    })()}
-                </div>
-            </div>
-
-            {/* ══════════════════════════════════════════════════════════
-                SAVE / RESET BAR
-            ══════════════════════════════════════════════════════════ */}
-
-            {/* Unsaved / error bar */}
-            {(isDirty || error) && (
-                <div
-                    className="flex flex-wrap items-center gap-3 px-4 py-3.5 rounded-2xl"
-                    style={{
-                        background: error
-                            ? 'rgba(255,59,59,0.05)'
-                            : 'linear-gradient(135deg, rgba(59,158,255,0.06) 0%, rgba(59,158,255,0.02) 100%)',
-                        border:     `1px solid ${error ? 'rgba(255,59,59,0.22)' : 'rgba(59,158,255,0.2)'}`,
-                        boxShadow:  error ? 'none' : '0 0 20px rgba(59,158,255,0.06)',
-                        animation:  'slide-in-up 180ms ease',
-                    }}
-                >
-                    {/* Status icon + label */}
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                        {error ? (
-                            <AlertTriangle size={13} strokeWidth={2} style={{ color: 'var(--severity-critical)', flexShrink: 0 }} />
-                        ) : (
-                            <div
-                                className="w-2 h-2 rounded-full shrink-0"
-                                style={{
-                                    background: 'var(--accent-primary)',
-                                    boxShadow:  '0 0 6px rgba(59,158,255,0.6)',
-                                    animation:  'pulse-dot 1.8s ease infinite',
-                                }}
-                            />
-                        )}
-                        <span style={{
-                            fontFamily: 'var(--font-mono)',
-                            fontSize:   'clamp(0.54rem, 0.48rem + 0.14vw, 0.62rem)',
-                            color:      error ? 'var(--severity-critical)' : 'var(--accent-primary)',
-                            fontWeight: 600,
-                        }}>
-                            {error ?? 'Unsaved changes'}
-                        </span>
-                        {!error && (
-                            <span style={{
-                                fontFamily: 'var(--font-mono)',
-                                fontSize:   'clamp(0.48rem, 0.42rem + 0.12vw, 0.54rem)',
-                                color:      'var(--text-disabled)',
-                            }}>
-                                — review before saving
-                            </span>
-                        )}
-                    </div>
-
-                    {/* Action buttons */}
-                    <div className="flex items-center gap-2 shrink-0">
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => { setLocal({ ...thresholds }); setError(null); }}
-                            disabled={saving}
-                            className="h-8.5 px-3 gap-1.5 rounded-xl transition-all duration-150"
-                            style={{
-                                fontFamily:  'var(--font-mono)',
-                                fontSize:    'clamp(0.52rem, 0.46rem + 0.13vw, 0.6rem)',
-                                color:       'var(--text-muted)',
-                                background:  'rgba(255,255,255,0.04)',
-                                border:      '1px solid var(--border-subtle)',
-                            }}
-                        >
-                            <RotateCcw size={11} strokeWidth={2} />
-                            Reset
-                        </Button>
-                        <Button
-                            size="sm"
-                            onClick={save}
-                            disabled={saving || !isDirty}
-                            className="h-8.5 px-4 gap-1.5 rounded-xl disabled:opacity-40 transition-all duration-150"
-                            style={{
-                                fontFamily:  'var(--font-mono)',
-                                fontSize:    'clamp(0.52rem, 0.46rem + 0.13vw, 0.6rem)',
-                                background:  'rgba(59,158,255,0.14)',
-                                border:      '1px solid rgba(59,158,255,0.38)',
-                                color:       'var(--accent-primary)',
-                                boxShadow:   saving ? 'none' : '0 0 12px rgba(59,158,255,0.18)',
-                            }}
-                        >
-                            {saving
-                                ? <><Loader2 size={11} strokeWidth={2} className="animate-spin" /> Saving…</>
-                                : <><Save size={11} strokeWidth={2} /> Save thresholds</>
-                            }
-                        </Button>
-                    </div>
-                </div>
-            )}
-
-            {/* Saved confirmation banner */}
-            {saved && (
-                <div
-                    className="flex items-center gap-3 px-4 py-3.5 rounded-2xl"
-                    style={{
-                        background: 'linear-gradient(135deg, rgba(34,197,94,0.08) 0%, rgba(34,197,94,0.03) 100%)',
-                        border:     '1px solid rgba(34,197,94,0.24)',
-                        boxShadow:  '0 0 20px rgba(34,197,94,0.07)',
-                        animation:  'slide-in-up 180ms ease',
-                    }}
-                >
-                    <div
-                        className="flex items-center justify-center shrink-0 rounded-lg"
-                        style={{
-                            width:      28,
-                            height:     28,
-                            background: 'rgba(34,197,94,0.14)',
-                            border:     '1px solid rgba(34,197,94,0.28)',
-                        }}
-                    >
-                        <CheckCircle2 size={14} strokeWidth={2.2} style={{ color: 'var(--status-online)' }} />
-                    </div>
-                    <div className="flex flex-col gap-0.75">
-                        <span style={{
-                            fontFamily: 'var(--font-display)',
-                            fontSize:   'clamp(0.62rem, 0.56rem + 0.18vw, 0.72rem)',
-                            fontWeight: 600,
-                            color:      'var(--status-online)',
-                            lineHeight: 1,
-                        }}>
-                            Thresholds saved
-                        </span>
-                        <span style={{
-                            fontFamily: 'var(--font-mono)',
-                            fontSize:   'clamp(0.48rem, 0.42rem + 0.12vw, 0.54rem)',
-                            color:      'rgba(34,197,94,0.6)',
-                            lineHeight: 1,
-                        }}>
-                            Takes effect on next evaluation cycle
-                        </span>
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-}
-// ─────────────────────────────────────────────────────────────────────────────
-// TAB 3: HISTORY
-// ─────────────────────────────────────────────────────────────────────────────
-
-function HistoryTab({ transitions }: { transitions: ModeTransition[] }) {
-    const [filter,   setFilter]   = useState<'all' | 'auto' | 'manual'>('all');
-    const [expanded, setExpanded] = useState<string | null>(null);
-
-    const filtered = useMemo(() => (filter === 'all' ? transitions : transitions.filter(t => t.triggeredBy === filter)).slice(0, 100), [transitions, filter]);
-
-    if (transitions.length === 0) {
-        return (
-            <div className="flex flex-col items-center justify-center gap-4 py-24" style={{ color: 'var(--text-disabled)' }}>
-                <div className="flex items-center justify-center w-12 h-12 rounded-full"
-                     style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-subtle)' }}>
-                    <History size={20} strokeWidth={1.5} style={{ opacity: 0.4 }} />
-                </div>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.58rem, 0.52rem + 0.18vw, 0.66rem)', letterSpacing: '0.06em' }}>
-                    No transitions recorded this session
-                </span>
-            </div>
-        );
-    }
+/* ─────────────────────────────────────────────
+   SIGNAL OVERRIDE SHEET
+───────────────────────────────────────────── */
+function SignalOverrideSheet({ corridor, onClose }: { corridor: SignalCorridor; onClose: () => void }) {
+    const [green, setGreen]   = useState([corridor.avgGreenTime]);
+    const [cycle, setCycle]   = useState([corridor.cycleLength]);
+    const [reason, setReason] = useState("");
+    const SigIcon = signalModeCfg[corridor.mode].icon;
 
     return (
-        <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap items-center gap-3">
-                <div className="flex items-center gap-1.25">
-                    {(['all', 'auto', 'manual'] as const).map(f => (
-                        <button key={f} onClick={() => setFilter(f)} className="rounded-lg transition-all duration-150 whitespace-nowrap"
-                                style={{ height: 26, padding: '0 10px', fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.5rem, 0.44rem + 0.14vw, 0.56rem)', letterSpacing: '0.07em', textTransform: 'uppercase', background: filter === f ? 'rgba(59,158,255,0.12)' : 'transparent', border: `1px solid ${filter === f ? 'rgba(59,158,255,0.35)' : 'var(--border-default)'}`, color: filter === f ? 'var(--accent-primary)' : 'var(--text-muted)', cursor: 'pointer', outline: 'none' }}>
-                            {f}
-                        </button>
-                    ))}
+        <div className="space-y-5 pt-2">
+            <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4 space-y-1">
+                <div className="flex justify-between items-center">
+                    <span className="text-xs font-bold text-white/80">{corridor.name} Corridor</span>
+                    <div className={`flex items-center gap-1 text-[11px] ${signalModeCfg[corridor.mode].color}`}>
+                        <SigIcon className="w-3.5 h-3.5"/>{signalModeCfg[corridor.mode].label}
+                    </div>
                 </div>
-                <Badge variant="outline" style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.46rem, 0.4rem + 0.12vw, 0.52rem)', fontWeight: 700, background: 'transparent', borderColor: 'var(--border-default)', color: 'var(--text-muted)' }}>
-                    {filtered.length} of {transitions.length}
-                </Badge>
-            </div>
-
-            <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border-default)' }}>
-                <div className="overflow-x-auto overflow-y-auto" style={{ maxHeight: 480 }}>
-                    <Table style={{ minWidth: 580 }}>
-                        <TableHeader className="sticky top-0 z-10">
-                            <TableRow className="hover:bg-transparent" style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-default)' }}>
-                                {[{ label: 'Time', w: 96 }, { label: 'Transition', w: 140 }, { label: 'Trigger', w: 90 }, { label: 'Reason' }, { label: 'Operator', w: 100 }].map(col => (
-                                    <TableHead key={col.label} className="py-3 px-4 whitespace-nowrap" style={{ width: col.w, fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.46rem, 0.4rem + 0.12vw, 0.52rem)', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
-                                        {col.label}
-                                    </TableHead>
-                                ))}
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {filtered.map((t, i) => {
-                                const isOpen = expanded === `${t.id}-${i}`;
-                                const isLast = i === filtered.length - 1;
-                                return (
-                                    <React.Fragment key={`${t.id}-${i}`}>
-                                        <TableRow className="group cursor-pointer transition-colors duration-150 hover:bg-[rgba(255,255,255,0.025)]"
-                                                  onClick={() => setExpanded(isOpen ? null : `${t.id}-${i}`)}
-                                                  style={{ borderBottom: isLast && !isOpen ? 'none' : '1px solid var(--border-subtle)', background: i === 0 ? 'rgba(59,158,255,0.015)' : 'transparent' }}>
-                                            <TableCell className="py-2.5 pl-4 pr-3 whitespace-nowrap">
-                                                <div className="flex flex-col gap-0.75">
-                                                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.52rem, 0.46rem + 0.14vw, 0.6rem)', color: 'var(--text-secondary)', lineHeight: 1 }}>{fmtTime(t.triggeredAt)}</span>
-                                                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.44rem, 0.38rem + 0.12vw, 0.5rem)', color: 'var(--text-disabled)', lineHeight: 1 }}>{fmtDate(t.triggeredAt)}</span>
-                                                </div>
-                                            </TableCell>
-                                            <TableCell className="py-2.5 px-3 whitespace-nowrap">
-                                                <div className="flex items-center gap-1.5 flex-wrap">
-                                                    <ModePill mode={t.from} /><ArrowRight size={10} style={{ color: 'var(--text-disabled)', flexShrink: 0 }} /><ModePill mode={t.to} />
-                                                    {i === 0 && <Badge variant="outline" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.44rem', background: 'rgba(59,158,255,0.08)', borderColor: 'rgba(59,158,255,0.22)', color: 'var(--accent-primary)' }}>Latest</Badge>}
-                                                </div>
-                                            </TableCell>
-                                            <TableCell className="py-2.5 px-3 whitespace-nowrap">
-                                                <Badge variant="outline" className="flex items-center gap-1 h-4.75 px-1.75"
-                                                       style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.44rem, 0.38rem + 0.12vw, 0.5rem)', fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', background: t.triggeredBy === 'auto' ? 'rgba(124,106,247,0.08)' : 'rgba(34,197,94,0.08)', borderColor: t.triggeredBy === 'auto' ? 'rgba(124,106,247,0.22)' : 'rgba(34,197,94,0.22)', color: t.triggeredBy === 'auto' ? 'var(--accent-secondary)' : 'var(--status-online)' }}>
-                                                    {t.triggeredBy === 'auto' ? <Cpu size={8} strokeWidth={2} /> : <User size={8} strokeWidth={2} />}
-                                                    {t.triggeredBy}
-                                                </Badge>
-                                            </TableCell>
-                                            <TableCell className="py-2.5 px-3">
-                                                <div className="flex items-center gap-2">
-                                                    <span className={`flex-1 min-w-0 leading-snug ${!isOpen ? 'line-clamp-1' : ''}`} style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.52rem, 0.46rem + 0.14vw, 0.6rem)', color: 'var(--text-secondary)' }}>
-                                                        {t.reason}
-                                                    </span>
-                                                    {isOpen ? <ChevronDown size={11} className="shrink-0" style={{ color: 'var(--text-disabled)' }} /> : <ChevronRightIcon size={11} className="shrink-0 opacity-0 group-hover:opacity-60 transition-opacity" style={{ color: 'var(--text-disabled)' }} />}
-                                                </div>
-                                            </TableCell>
-                                            <TableCell className="py-2.5 px-3 pr-4 whitespace-nowrap">
-                                                {t.operatorId
-                                                    ? <div className="flex items-center gap-1.25"><User size={10} strokeWidth={2} style={{ color: 'var(--text-muted)', flexShrink: 0 }} /><span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.5rem, 0.44rem + 0.14vw, 0.58rem)', color: 'var(--text-secondary)' }}>{t.operatorId}</span></div>
-                                                    : <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.5rem, 0.44rem + 0.14vw, 0.58rem)', color: 'var(--text-disabled)' }}>System</span>
-                                                }
-                                            </TableCell>
-                                        </TableRow>
-                                        {isOpen && (
-                                            <TableRow className="hover:bg-transparent" style={{ borderBottom: isLast ? 'none' : '1px solid var(--border-subtle)' }}>
-                                                <TableCell className="py-0 pl-4 pr-3" />
-                                                <TableCell colSpan={4} className="py-0 pl-0 pr-4 pb-3">
-                                                    <div className="flex flex-col gap-1.5 px-4 py-3 rounded-xl"
-                                                         style={{ background: 'rgba(255,255,255,0.022)', border: '1px solid var(--border-subtle)', borderLeft: `2px solid ${MODE_COLOR[t.to]}50`, animation: 'slide-in-up 150ms ease' }}>
-                                                        <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.58rem, 0.52rem + 0.16vw, 0.66rem)', color: 'var(--text-primary)', lineHeight: 1.45, margin: 0 }}>{t.reason}</p>
-                                                        <div className="flex flex-wrap gap-x-5">
-                                                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.44rem, 0.38rem + 0.12vw, 0.5rem)', color: 'var(--text-disabled)' }}>ID: {t.id}</span>
-                                                            {t.operatorId && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.44rem, 0.38rem + 0.12vw, 0.5rem)', color: 'var(--text-disabled)' }}>Operator: {t.operatorId}</span>}
-                                                        </div>
-                                                    </div>
-                                                </TableCell>
-                                            </TableRow>
-                                        )}
-                                    </React.Fragment>
-                                );
-                            })}
-                        </TableBody>
-                    </Table>
-                </div>
-            </div>
-        </div>
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TAB 4: ANALYTICS — Daily Traffic Summary + Peak Hours + Incident Count + Export
-// ─────────────────────────────────────────────────────────────────────────────
-
-function DeltaBadge({ value }: { value: number }) {
-    const isPos = value >= 0;
-    const Icon  = isPos ? ArrowUpRight : ArrowDownRight;
-    return (
-        <span className="flex items-center gap-0.5 text-[0.48rem] font-semibold"
-              style={{ color: isPos ? 'var(--severity-high)' : 'var(--status-online)', fontFamily: 'var(--font-mono)' }}>
-            <Icon size={9} strokeWidth={2.5} />
-            {Math.abs(value)}% vs yesterday
-        </span>
-    );
-}
-
-function KpiCard({ label, value, sub, color, icon: Icon, delta }: {
-    label:  string;
-    value:  string;
-    sub?:   string;
-    color?: string;
-    icon:   React.ElementType;
-    delta?: number;
-}) {
-    return (
-        <div className="flex flex-col gap-2 p-4 rounded-xl"
-             style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-default)' }}>
-            <div className="flex items-center justify-between">
-                <div className="flex items-center justify-center rounded-lg"
-                     style={{ width: 28, height: 28, background: color ? `${color}14` : 'var(--bg-elevated)', border: `1px solid ${color ? `${color}28` : 'var(--border-subtle)'}` }}>
-                    <Icon size={13} strokeWidth={2} style={{ color: color ?? 'var(--text-muted)' }} />
-                </div>
-                {delta !== undefined && <DeltaBadge value={delta} />}
-            </div>
-            <div>
-                <p style={{ fontFamily: 'var(--font-display)', fontSize: 'clamp(1.1rem, 0.9rem + 0.7vw, 1.4rem)', fontWeight: 800, color: color ?? 'var(--text-primary)', lineHeight: 1 }}>
-                    {value}
-                </p>
-                <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.48rem, 0.42rem + 0.14vw, 0.54rem)', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-muted)', marginTop: 3, lineHeight: 1 }}>
-                    {label}
-                </p>
-                {sub && (
-                    <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.46rem, 0.4rem + 0.12vw, 0.52rem)', color: 'var(--text-disabled)', marginTop: 2 }}>
-                        {sub}
-                    </p>
+                <div className="text-[11px] text-white/40">{corridor.signals} managed signals · Route {corridor.routeId}</div>
+                {corridor.lockedBy && (
+                    <div className={`flex items-center gap-1 text-[10px] ${agencyCfg[corridor.lockedBy].color} mt-1`}>
+                        <Lock className="w-3 h-3"/>Locked by {agencyCfg[corridor.lockedBy].label}
+                    </div>
                 )}
             </div>
-        </div>
-    );
-}
 
-function HourlyChart({ data }: { data: number[] }) {
-    const peak = Math.max(...data);
-    const hours = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}`);
-
-    return (
-        <div>
-            <div className="flex items-end gap-0.75 h-20">
-                {data.map((v, i) => {
-                    const pct        = v / peak;
-                    const isPeak     = v === peak;
-                    const isEvening  = i >= 17 && i <= 18;
-                    const isMorning  = i >= 7 && i <= 8;
-                    const barColor   = isPeak || isMorning || isEvening ? 'var(--severity-high)' : v > 60 ? 'var(--severity-medium)' : 'var(--accent-primary)';
-
-                    return (
-                        <Tooltip key={i}>
-                            <TooltipTrigger asChild>
-                                <div className="flex-1 rounded-sm transition-all duration-300 cursor-default relative group"
-                                     style={{ height: `${Math.max(4, pct * 100)}%`, background: barColor, opacity: 0.7 }}>
-                                    {isPeak && (
-                                        <span className="absolute -top-3 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full" style={{ background: 'var(--severity-critical)' }} />
-                                    )}
-                                </div>
-                            </TooltipTrigger>
-                            <TooltipContent side="top" className="text-xs" style={{ fontFamily: 'var(--font-mono)' }}>
-                                {hours[i]}:00 — {v}% volume
-                            </TooltipContent>
-                        </Tooltip>
-                    );
-                })}
-            </div>
-            {/* Hour labels — show every 4h */}
-            <div className="flex items-center mt-1" style={{ gap: 0 }}>
-                {hours.map((h, i) => (
-                    <div key={i} className="flex-1 text-center">
-                        {i % 4 === 0 && (
-                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.42rem', color: 'var(--text-disabled)' }}>{h}</span>
-                        )}
+            <div className="grid grid-cols-2 gap-2">
+                {[
+                    { label: "Current Green",    value: `${corridor.avgGreenTime}s`,       color: "text-white/60" },
+                    { label: "AI Recommends",    value: `${corridor.aiRecommendedGreen}s`, color: "text-cyan-400" },
+                    { label: "Override Green",   value: `${green[0]}s`,                    color: "text-amber-400" },
+                    { label: "PSV Throughput",   value: `${corridor.psvThroughput}/hr`,    color: "text-white/60" },
+                ].map(s => (
+                    <div key={s.label} className="rounded-md border border-white/10 bg-white/[0.03] p-2.5 text-center">
+                        <div className={`text-sm font-bold font-mono ${s.color}`}>{s.value}</div>
+                        <div className="text-[9px] text-white/28 mt-0.5">{s.label}</div>
                     </div>
                 ))}
             </div>
-        </div>
-    );
-}
 
-function IncidentCountCard({ counts }: { counts: ReturnType<typeof useDailyTrafficData>['incidentCounts'] }) {
-    const severities: Array<{ key: keyof typeof counts; label: string; icon: React.ElementType }> = [
-        { key: 'critical', label: 'Critical', icon: AlertTriangle },
-        { key: 'high',     label: 'High',     icon: Flame         },
-        { key: 'medium',   label: 'Medium',   icon: AlertCircle   },
-        { key: 'low',      label: 'Low',      icon: Info          },
-        { key: 'info',     label: 'Info',     icon: Radio         },
-    ];
-
-    return (
-        <div className="flex flex-col gap-2">
-            {severities.map(({ key, label, icon: Icon }) => {
-                const count = counts[key] as number;
-                const pct   = Math.round((count / counts.total) * 100);
-                const color = SEVERITY_COLORS[key];
-                return (
-                    <div key={key} className="flex items-center gap-3">
-                        <div className="flex items-center gap-1.5 w-20 shrink-0">
-                            <Icon size={11} strokeWidth={2} style={{ color, flexShrink: 0 }} />
-                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.5rem, 0.44rem + 0.12vw, 0.56rem)', color: 'var(--text-muted)' }}>
-                                {label}
-                            </span>
-                        </div>
-                        <div className="flex-1">
-                            <Progress value={pct}
-                                      className="h-1.25"
-                                      style={{ background: `${color}18`, '--progress-foreground': color } as React.CSSProperties} />
-                        </div>
-                        <span className="w-8 text-right tabular-nums shrink-0"
-                              style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.54rem, 0.48rem + 0.14vw, 0.62rem)', fontWeight: 700, color }}>
-                            {count}
-                        </span>
-                        <span className="w-8 text-right shrink-0"
-                              style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.44rem, 0.38rem + 0.12vw, 0.5rem)', color: 'var(--text-disabled)' }}>
-                            {pct}%
-                        </span>
-                    </div>
-                );
-            })}
-            <div className="mt-1 pt-2 flex items-center justify-between" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.48rem, 0.42rem + 0.12vw, 0.54rem)', color: 'var(--text-muted)', letterSpacing: '0.06em' }}>
-                    Total incidents today
-                </span>
-                <span className="flex items-center gap-1.5">
-                    <span style={{ fontFamily: 'var(--font-display)', fontSize: 'clamp(0.9rem, 0.78rem + 0.4vw, 1.1rem)', fontWeight: 800, color: 'var(--text-primary)' }}>
-                        {counts.total}
-                    </span>
-                    <DeltaBadge value={counts.deltaVsYesterday} />
-                </span>
-            </div>
-        </div>
-    );
-}
-
-function PeakHoursLog({ peaks }: { peaks: ReturnType<typeof useDailyTrafficData>['peakHours'] }) {
-    return (
-        <div className="flex flex-col gap-2">
-            {peaks.map((peak, i) => {
-                const modeColor = MODE_COLOR[peak.mode];
-                const severity  = peak.incidents > 15 ? 'critical' : peak.incidents > 8 ? 'high' : 'medium';
-                const incColor  = SEVERITY_COLORS[severity];
-
-                return (
-                    <div key={i} className="flex items-stretch gap-3 p-3 rounded-xl"
-                         style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderLeft: `3px solid ${incColor}` }}>
-                        {/* Time badge */}
-                        <div className="flex flex-col items-center justify-center gap-0.5 shrink-0 px-2 rounded-lg"
-                             style={{ background: `${incColor}08`, border: `1px solid ${incColor}20`, minWidth: 60 }}>
-                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.62rem', fontWeight: 700, color: incColor, lineHeight: 1 }}>
-                                {peak.start}
-                            </span>
-                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.44rem', color: 'var(--text-disabled)' }}>
-                                –{peak.end}
-                            </span>
-                        </div>
-
-                        <div className="flex-1 min-w-0 flex flex-col gap-1.5">
-                            <div className="flex items-center justify-between flex-wrap gap-1">
-                                <span style={{ fontFamily: 'var(--font-display)', fontSize: 'clamp(0.62rem, 0.56rem + 0.18vw, 0.72rem)', fontWeight: 700, color: 'var(--text-primary)' }}>
-                                    {peak.label}
-                                </span>
-                                <ModePill mode={peak.mode} />
-                            </div>
-                            <div className="flex items-center gap-3 flex-wrap">
-                                <div className="flex items-center gap-1">
-                                    <Car size={9} strokeWidth={2} style={{ color: 'var(--text-disabled)' }} />
-                                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.48rem, 0.42rem + 0.12vw, 0.54rem)', color: 'var(--text-muted)' }}>
-                                        Volume: <strong style={{ color: 'var(--text-primary)' }}>{peak.volume}%</strong>
-                                    </span>
-                                </div>
-                                <div className="flex items-center gap-1">
-                                    <AlertCircle size={9} strokeWidth={2} style={{ color: incColor }} />
-                                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.48rem, 0.42rem + 0.12vw, 0.54rem)', color: incColor, fontWeight: 600 }}>
-                                        {peak.incidents} incidents
-                                    </span>
-                                </div>
-                            </div>
-                            {/* Volume bar */}
-                            <Progress value={peak.volume} className="h-0.75"
-                                      style={{ background: `${modeColor}15`, '--progress-foreground': modeColor } as React.CSSProperties} />
-                        </div>
-                    </div>
-                );
-            })}
-        </div>
-    );
-}
-
-function AnalyticsTab({ transitions }: { transitions: ModeTransition[] }) {
-    const { hourlyVolume, summary, incidentCounts, peakHours } = useDailyTrafficData();
-    const [exporting, setExporting] = useState<'csv' | 'pdf' | null>(null);
-
-    const handleCSV = () => {
-        setExporting('csv');
-        const csv = buildCSV(transitions);
-        downloadCSV(csv, `atms-audit-${new Date().toISOString().slice(0, 10)}.csv`);
-        setTimeout(() => setExporting(null), 800);
-    };
-
-    const handlePDF = () => {
-        setExporting('pdf');
-        downloadPDF(transitions, summary, incidentCounts);
-        setTimeout(() => setExporting(null), 800);
-    };
-
-    const today = new Date().toLocaleDateString('en-KE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-
-    return (
-        <div className="flex flex-col gap-4">
-
-            {/* ── Header row: date + export buttons ── */}
-            <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                    <Calendar size={14} strokeWidth={2} style={{ color: 'var(--text-muted)' }} />
-                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.52rem, 0.46rem + 0.14vw, 0.6rem)', color: 'var(--text-muted)' }}>
-                        {today}
-                    </span>
-                </div>
-                <div className="flex items-center gap-2">
-                    <Button size="sm" variant="outline" onClick={handleCSV} disabled={exporting !== null}
-                            className="h-7.5 gap-1.5 text-[0.56rem] tracking-[0.05em] font-semibold transition-all"
-                            style={{ fontFamily: 'var(--font-mono)', background: 'rgba(80,200,120,0.08)', borderColor: 'rgba(80,200,120,0.3)', color: 'var(--status-online)' }}>
-                        {exporting === 'csv' ? <CheckCircle2 size={11} strokeWidth={2.5} /> : <FileDown size={11} strokeWidth={2} />}
-                        Export CSV
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={handlePDF} disabled={exporting !== null}
-                            className="h-7.5 gap-1.5 text-[0.56rem] tracking-[0.05em] font-semibold transition-all"
-                            style={{ fontFamily: 'var(--font-mono)', background: 'rgba(59,158,255,0.08)', borderColor: 'rgba(59,158,255,0.3)', color: 'var(--accent-primary)' }}>
-                        {exporting === 'pdf' ? <CheckCircle2 size={11} strokeWidth={2.5} /> : <FileText size={11} strokeWidth={2} />}
-                        Export PDF
-                    </Button>
+            <div className="space-y-3">
+                <label className="text-xs font-semibold text-white/60">PSV Green Phase (seconds)</label>
+                <Slider value={green} onValueChange={setGreen} min={20} max={90} step={5}/>
+                <div className="flex justify-between text-[10px] text-white/25">
+                    <span>20s min</span>
+                    <span className="text-amber-400 font-bold font-mono">{green[0]}s</span>
+                    <span>90s max</span>
                 </div>
             </div>
 
-            {/* ── KPI cards row ── */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <KpiCard label="Vehicles Today"  value={summary.totalVehicles.toLocaleString()} icon={Car}           color="var(--accent-primary)"    delta={summary.comparedYesterday} />
-                <KpiCard label="Avg Speed"        value={`${summary.avgSpeedKmh} km/h`}          icon={Activity}      color="var(--status-online)"                                       sub="City-wide" />
-                <KpiCard label="Congestion Index" value={`${summary.congestionIndex}`}            icon={Gauge}         color={summary.congestionIndex > 70 ? 'var(--severity-high)' : 'var(--severity-medium)'} sub="out of 100" />
-                <KpiCard label="Total Incidents"  value={String(incidentCounts.total)}            icon={AlertTriangle} color="var(--severity-high)"     delta={incidentCounts.deltaVsYesterday} />
+            <div className="space-y-3">
+                <label className="text-xs font-semibold text-white/60">Signal Cycle Length (seconds)</label>
+                <Slider value={cycle} onValueChange={setCycle} min={60} max={150} step={5}/>
+                <div className="flex justify-between text-[10px] text-white/25">
+                    <span>60s</span>
+                    <span className="text-white/50 font-bold font-mono">{cycle[0]}s</span>
+                    <span>150s</span>
+                </div>
             </div>
 
-            {/* ── Two-column middle ── */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="space-y-2">
+                <label className="text-xs font-semibold text-white/60">Reason for Override</label>
+                <Select onValueChange={setReason}>
+                    <SelectTrigger className="bg-white/5 border-white/10 text-white/70 text-xs h-9">
+                        <SelectValue placeholder="Select reason..."/>
+                    </SelectTrigger>
+                    <SelectContent className="bg-zinc-900 border-white/10">
+                        {["Traffic incident on corridor","Emergency vehicle priority","Special event","AI confidence too low","Sensor malfunction","Policy directive","Cross-agency coordination"].map(r => (
+                            <SelectItem key={r} value={r} className="text-xs text-white/70 focus:bg-white/10">{r}</SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            </div>
 
-                {/* 24-hour traffic chart */}
-                <SectionCard title="24-Hour Traffic Volume" subtitle={`Peak: ${summary.peakVolumeHour} · ${summary.peakVolumePct}% capacity`} icon={BarChart3} iconColor="var(--accent-primary)">
-                    <HourlyChart data={hourlyVolume} />
-                    <div className="flex items-center gap-4 mt-4 flex-wrap">
-                        {[
-                            { color: 'var(--severity-high)',   label: 'High volume'   },
-                            { color: 'var(--severity-medium)', label: 'Moderate'      },
-                            { color: 'var(--accent-primary)',  label: 'Normal'        },
-                        ].map(l => (
-                            <div key={l.label} className="flex items-center gap-1.5">
-                                <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: l.color, opacity: 0.8 }} />
-                                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.48rem', color: 'var(--text-disabled)' }}>{l.label}</span>
-                            </div>
+            {green[0] > 70 && (
+                <div className="flex gap-2 items-start rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5"/>
+                    <p className="text-[11px] text-amber-300/80">Extended green may cause side-street congestion. Coordinate with adjacent corridors.</p>
+                </div>
+            )}
+
+            <div className="flex gap-3 pt-1">
+                <Button className="flex-1 bg-cyan-700 hover:bg-cyan-600 text-white font-bold h-10 text-sm gap-1.5" disabled={!reason}>
+                    <Signal className="w-4 h-4"/>Apply Override
+                </Button>
+                <Button variant="outline" className="border-white/15 text-white/40 hover:bg-white/5 h-10" onClick={onClose}>
+                    Cancel
+                </Button>
+            </div>
+            <p className="text-[10px] text-white/20 text-center">Override logged to audit trail with operator identity + timestamp</p>
+        </div>
+    );
+}
+
+/* ─────────────────────────────────────────────
+   AGENCY AI MODE SELECTOR
+───────────────────────────────────────────── */
+function AgencyAIModeSelector({ mode, onChange, agencyColor }: {
+    mode: AgencyAIMode; onChange: (m: AgencyAIMode) => void; agencyColor: string;
+}) {
+    const modes: AgencyAIMode[] = ["full_auto","assisted","operator","disabled"];
+    return (
+        <div className="space-y-2">
+            <div className="text-[10px] uppercase tracking-widest text-white/30 font-bold">AI Operating Mode</div>
+            <div className="grid grid-cols-2 gap-1.5">
+                {modes.map(m => {
+                    const mc = aiModeCfg[m];
+                    const isActive = mode === m;
+                    return (
+                        <button key={m} onClick={() => onChange(m)}
+                                className={`flex flex-col gap-1 p-2.5 rounded-lg border text-left transition-all ${
+                                    isActive ? `${mc.bg} ${mc.border} ring-1 ring-current/40` : "border-white/8 bg-white/[0.02] hover:border-white/15"
+                                }`}>
+                            <span className={`text-[10px] font-bold ${isActive ? mc.color : "text-white/35"}`}>{mc.label}</span>
+                            <span className={`text-[9px] leading-snug ${isActive ? "text-white/50" : "text-white/20"}`}>{mc.desc}</span>
+                        </button>
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
+/* ─────────────────────────────────────────────
+   CONTROL MODULE CARD
+───────────────────────────────────────────── */
+function ControlModuleCard({ mod }: { mod: ControlModule }) {
+    const ag = agencyCfg[mod.agency];
+    const st = modulusStatusCfg[mod.status];
+    const AgIcon = ag.icon;
+
+    return (
+        <div className={`rounded-xl border p-4 transition-all hover:border-white/15 ${
+            mod.status === "active" ? "border-white/10 bg-white/[0.02]" :
+                mod.status === "standby" ? "border-amber-500/15 bg-amber-500/3 opacity-75" :
+                    "border-white/6 bg-white/[0.01] opacity-55"
+        }`}>
+            <div className="flex items-start justify-between gap-2 mb-3">
+                <div>
+                    <div className="text-xs font-bold text-white/85 leading-snug">{mod.name}</div>
+                    <div className="text-[10px] font-mono text-white/30">{mod.id}</div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                    {mod.aiControlled && (
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <div className="flex items-center gap-1 text-[9px] text-cyan-400/70">
+                                    <Brain className="w-3 h-3"/>AI
+                                </div>
+                            </TooltipTrigger>
+                            <TooltipContent className="bg-zinc-800 border-white/10 text-xs">AI-controlled module</TooltipContent>
+                        </Tooltip>
+                    )}
+                    <div className="flex items-center gap-1 text-[10px]">
+                        <span className={`w-1.5 h-1.5 rounded-full ${st.dot} ${mod.status === "active" ? "animate-pulse" : ""}`}/>
+                        <span className={st.color}>{st.label}</span>
+                    </div>
+                </div>
+            </div>
+
+            <p className="text-[11px] text-white/40 leading-snug mb-3">{mod.description}</p>
+
+            <div className="grid grid-cols-3 gap-1.5 mb-3">
+                {mod.metrics.map(m => (
+                    <div key={m.label} className="rounded-md border border-white/8 bg-white/[0.02] p-2 text-center">
+                        <div className={`text-xs font-bold font-mono ${m.color}`}>{m.value}</div>
+                        <div className="text-[9px] text-white/25 mt-0.5 leading-tight">{m.label}</div>
+                    </div>
+                ))}
+            </div>
+
+            <div className="flex items-center justify-between">
+                <div className={`flex items-center gap-1.5 text-[10px] ${ag.color}`}>
+                    <AgIcon className="w-3 h-3"/>{ag.label}
+                </div>
+                <div className="flex gap-1.5">
+                    {mod.status === "active" && (
+                        <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px] text-amber-400 hover:bg-amber-500/10">
+                            <Zap className="w-3 h-3 mr-1"/>Config
+                        </Button>
+                    )}
+                    {mod.status === "standby" && (
+                        <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px] text-emerald-400 hover:bg-emerald-500/10">
+                            <CheckCircle2 className="w-3 h-3 mr-1"/>Activate
+                        </Button>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+/* ─────────────────────────────────────────────
+   MAIN PAGE
+───────────────────────────────────────────── */
+export default function ModesPage() {
+    const [workspaces, setWorkspaces] = useState(AGENCY_WORKSPACES);
+    const [activeAgency, setActiveAgency] = useState<Agency>("traffic_control");
+    const [signalSheet, setSignalSheet]   = useState<SignalCorridor | null>(null);
+    const [simValue, setSimValue]         = useState([50]);
+
+    const currentWS   = workspaces.find(w => w.id === activeAgency)!;
+    const CurrentIcon = currentWS.icon;
+
+    const updateAgencyMode = (agency: Agency, mode: AgencyAIMode) => {
+        setWorkspaces(p => p.map(w => w.id === agency ? { ...w, aiMode: mode } : w));
+    };
+
+    const agencyModules  = CONTROL_MODULES.filter(m => m.agency === activeAgency);
+    const agencyRoutes   = ROUTE_MODES.filter(r => r.governedBy.includes(activeAgency));
+    const agencyCorridors = SIGNAL_CORRIDORS; // traffic control sees all
+    const crossItems     = CROSS_AGENCY.filter(c => c.agencies.includes(activeAgency));
+
+    return (
+        <TooltipProvider delayDuration={300}>
+            <div className="min-h-screen bg-[#0d0f12] text-white" style={{ fontFamily: "'DM Mono','JetBrains Mono',monospace" }}>
+
+                {/* Scanline */}
+                <div className="pointer-events-none fixed inset-0 z-0 opacity-[0.015]"
+                     style={{ backgroundImage: "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,0.3) 2px,rgba(255,255,255,0.3) 3px)" }}/>
+
+                {/* Phase banner */}
+                <div className={`relative z-20 flex items-center justify-center gap-3 px-4 py-1.5 border-b ${phaseCfg[SYSTEM_PHASE].bg} ${phaseCfg[SYSTEM_PHASE].border}`}>
+                    <Layers className={`w-3.5 h-3.5 ${phaseCfg[SYSTEM_PHASE].color}`}/>
+                    <span className={`text-[11px] font-bold ${phaseCfg[SYSTEM_PHASE].color}`}>Phase {SYSTEM_PHASE} Deployment</span>
+                    <span className="text-[10px] text-white/30">·</span>
+                    <span className="text-[10px] text-white/40">AI Recommendations Active · Policy-backed corridors</span>
+                    <div className="absolute right-4 flex gap-1.5">
+                        {([1,2,3] as SystemPhase[]).map(p => (
+                            <div key={p} className={`w-1.5 h-1.5 rounded-full ${p <= SYSTEM_PHASE ? phaseCfg[p].color.replace("text-","bg-") : "bg-white/15"}`}/>
                         ))}
                     </div>
-                </SectionCard>
-
-                {/* Incident breakdown */}
-                <SectionCard title="Incident Count" subtitle={`${incidentCounts.total} total · ${incidentCounts.critical} critical`} icon={AlertTriangle} iconColor="var(--severity-high)">
-                    <IncidentCountCard counts={incidentCounts} />
-                </SectionCard>
-            </div>
-
-            {/* ── Peak hours event log (full width) ── */}
-            <SectionCard title="Peak Hours Log" subtitle="High-activity windows with incident density and operating mode" icon={Clock} iconColor="var(--severity-medium)">
-                <PeakHoursLog peaks={peakHours} />
-            </SectionCard>
-
-            {/* ── Audit export note ── */}
-            <div className="flex items-start gap-2.5 px-4 py-3 rounded-xl"
-                 style={{ background: 'rgba(59,158,255,0.04)', border: '1px solid rgba(59,158,255,0.15)' }}>
-                <Download size={13} strokeWidth={2} style={{ color: 'var(--accent-primary)', flexShrink: 0, marginTop: 1 }} />
-                <div>
-                    <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.52rem, 0.46rem + 0.14vw, 0.6rem)', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                        <strong style={{ color: 'var(--accent-primary)' }}>Audit exports</strong> include all mode transitions for this session, daily KPIs, and incident counts.
-                        CSV exports are suitable for spreadsheet analysis. PDF opens in a new tab for direct printing.
-                    </p>
-                    <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.48rem, 0.42rem + 0.12vw, 0.54rem)', color: 'var(--text-disabled)', marginTop: 4 }}>
-                        {transitions.length} transition record{transitions.length !== 1 ? 's' : ''} available · Report date: {today}
-                    </p>
                 </div>
-            </div>
-        </div>
-    );
-}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PAGE
-// ─────────────────────────────────────────────────────────────────────────────
-
-export default function ModesPage() {
-    const { thresholds, transitions, currentMode } = useMode();
-    const [localThresholds, setLocalThresholds]    = useState(thresholds);
-    const color = MODE_COLOR[currentMode];
-
-    return (
-        <TooltipProvider delayDuration={200}>
-            <div className="flex flex-col h-full w-full overflow-hidden" style={{ background: 'var(--bg-base)' }}>
-
-                {/* ── Page header ── */}
-                <header className="shrink-0 w-full px-5 pt-5 pb-4 flex items-center gap-4"
-                        style={{ background: 'var(--bg-raised)', borderBottom: '1px solid var(--border-default)' }}>
-                    <div className="flex items-center justify-center shrink-0 rounded-xl"
-                         style={{ width: 40, height: 40, background: `${color}12`, border: `1px solid ${color}30`, boxShadow: `0 0 14px ${color}14` }}>
-                        <Settings2 size={18} strokeWidth={2} style={{ color }} />
+                {/* ── TOPBAR ── */}
+                <header className="relative z-10 h-14 border-b border-white/8 bg-[#0d0f12]/95 backdrop-blur-sm flex items-center px-5 gap-4">
+                    <div className="flex items-center gap-2.5 shrink-0">
+                        <div className="relative w-8 h-8 rounded-lg bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center">
+                            <LayoutGrid className="w-4 h-4 text-cyan-400"/>
+                        </div>
+                        <div>
+                            <div className="text-xs font-bold tracking-[0.2em] text-white/90 uppercase">Control Modes</div>
+                            <div className="text-[9px] tracking-widest text-white/30 uppercase">TransitCtrl · Multi-Agency</div>
+                        </div>
                     </div>
-                    <div className="flex-1 min-w-0">
-                        <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 'clamp(1rem, 0.85rem + 0.5vw, 1.2rem)', fontWeight: 800, color: 'var(--text-primary)', lineHeight: 1, marginBottom: 4 }}>
-                            Mode Control
-                        </h1>
-                        <p className="truncate" style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.52rem, 0.46rem + 0.16vw, 0.6rem)', color: 'var(--text-muted)' }}>
-                            Configure thresholds, auto-transition rules, manual overrides · Daily traffic analytics &amp; audit exports
-                        </p>
+
+                    <div className="h-6 w-px bg-white/10 mx-1"/>
+
+                    <div className="flex items-center gap-1.5 text-[10px] text-white/40">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/>
+                        <span>LIVE</span>
+                        <span className="text-white/20">·</span>
+                        <Clock className="w-3 h-3"/>
+                        <span>15:46</span>
                     </div>
-                    <div className="hidden sm:flex items-center gap-2 px-3 py-2 rounded-lg shrink-0"
-                         style={{ background: MODE_BG[currentMode], border: `1px solid ${MODE_BORDER[currentMode]}` }}>
-                        <div style={{ width: 5, height: 5, borderRadius: '50%', background: color, boxShadow: `0 0 5px ${color}`, animation: 'pulse-dot 1.5s ease infinite' }} />
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.5rem, 0.44rem + 0.14vw, 0.56rem)', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color, whiteSpace: 'nowrap' }}>
-                        {currentMode === 'AI-Prioritized' ? 'AI' : 'HV'} Active
-                    </span>
+
+                    {/* Per-agency AI mode pills */}
+                    <div className="hidden xl:flex items-center gap-2 ml-2">
+                        {workspaces.map(ws => {
+                            const mc   = aiModeCfg[ws.aiMode];
+                            const WIcon = ws.icon;
+                            return (
+                                <Tooltip key={ws.id}>
+                                    <TooltipTrigger asChild>
+                                        <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[10px] cursor-pointer transition-all hover:ring-1 hover:ring-white/20 ${mc.bg} ${mc.border}`}
+                                             onClick={() => setActiveAgency(ws.id)}>
+                                            <WIcon className={`w-3 h-3 ${ws.color}`}/>
+                                            <span className={`font-bold ${ws.color}`}>{ws.shortLabel}</span>
+                                            <span className={`text-[9px] ${mc.color}`}>{mc.label}</span>
+                                        </div>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="bottom" className="bg-zinc-800 border-white/10 text-xs">{ws.label} · {ws.operatorOnDuty} on duty</TooltipContent>
+                                </Tooltip>
+                            );
+                        })}
                     </div>
+
+                    <div className="flex-1"/>
+
+                    <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-white/40 hover:text-white hover:bg-white/5 text-[11px]">
+                        <RefreshCw className="w-3.5 h-3.5"/>Sync
+                    </Button>
+
+                    <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="sm" className="h-8 gap-2 text-white/50 hover:text-white hover:bg-white/5 text-[11px]">
+                                <User className="w-3.5 h-3.5"/>{currentWS.operatorOnDuty}<ChevronDown className="w-3 h-3"/>
+                            </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="bg-zinc-900 border-white/10 w-44">
+                            <DropdownMenuLabel className="text-white/40 text-[10px]">{currentWS.label}</DropdownMenuLabel>
+                            <DropdownMenuSeparator className="bg-white/10"/>
+                            <DropdownMenuItem className="text-xs text-white/60 focus:bg-white/5 gap-2"><Settings className="w-3.5 h-3.5"/>Settings</DropdownMenuItem>
+                            <DropdownMenuItem className="text-xs text-white/60 focus:bg-white/5 gap-2"><History className="w-3.5 h-3.5"/>Audit Trail</DropdownMenuItem>
+                        </DropdownMenuContent>
+                    </DropdownMenu>
                 </header>
 
-                {/* ── Live status band ── */}
-                <LiveBand />
+                {/* ── MAIN ── */}
+                <main className="relative z-10 flex h-[calc(100vh-84px)]">
 
-                {/* ── Tabs ── */}
-                <Tabs defaultValue="status" className="flex flex-col flex-1 overflow-hidden min-h-0">
-                    <div className="shrink-0 px-5 pt-3 pb-0"
-                         style={{ background: 'var(--bg-raised)', borderBottom: '1px solid var(--border-default)' }}>
-                        <TabsList className="w-full h-9 rounded-xl p-0.75 gap-0.75"
-                                  style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)' }}>
-                            {[
-                                { value: 'status',     label: 'Status',     Icon: Activity,  badge: undefined },
-                                { value: 'thresholds', label: 'Thresholds', Icon: Settings2, badge: undefined },
-                                { value: 'history',    label: 'History',    Icon: History,   badge: transitions.length },
-                                { value: 'analytics',  label: 'Analytics',  Icon: BarChart3, badge: undefined, accent: true },
-                            ].map(tab => (
-                                <TabsTrigger key={tab.value} value={tab.value}
-                                             className="flex-1 h-7.5 flex items-center justify-center gap-1.5 tracking-[0.06em] uppercase rounded-[9px] data-[state=active]:bg-(--bg-overlay) data-[state=active]:text-(--text-primary) data-[state=active]:shadow-[0_1px_6px_rgba(0,0,0,0.35)] text-(--text-muted) transition-all duration-200"
-                                             style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(0.54rem, 0.48rem + 0.18vw, 0.64rem)' }}>
-                                    <tab.Icon size={12} strokeWidth={2} style={tab.accent ? { color: 'var(--severity-medium)' } : {}} />
-                                    <span className="hidden xs:inline">{tab.label}</span>
-                                    {tab.badge !== undefined && tab.badge > 0 && (
-                                        <Badge variant="outline" className="h-3.75 px-1.5 leading-none rounded-full"
-                                               style={{ fontFamily: 'var(--font-mono)', fontSize: '0.44rem', fontWeight: 700, background: 'rgba(59,158,255,0.12)', borderColor: 'rgba(59,158,255,0.3)', color: 'var(--accent-primary)' }}>
-                                            {tab.badge}
-                                        </Badge>
-                                    )}
-                                    {tab.accent && (
-                                        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: 'var(--severity-medium)', boxShadow: '0 0 4px var(--severity-medium)' }} />
-                                    )}
-                                </TabsTrigger>
-                            ))}
-                        </TabsList>
-                    </div>
+                    {/* LEFT — AGENCY SELECTOR */}
+                    <aside className="w-60 shrink-0 border-r border-white/8 flex flex-col">
+                        <div className="px-4 py-3 border-b border-white/8 flex items-center gap-2">
+                            <Workflow className="w-4 h-4 text-white/40"/>
+                            <span className="text-[11px] font-bold tracking-widest text-white/60 uppercase">Agencies</span>
+                        </div>
 
-                    <div className="flex-1 overflow-hidden min-h-0">
-                        <TabsContent value="status" className="h-full mt-0 data-[state=inactive]:hidden">
-                            <ScrollArea className="h-full">
-                                <div className="px-5 py-5 w-full"><StatusTab /></div>
-                            </ScrollArea>
-                        </TabsContent>
-                        <TabsContent value="thresholds" className="h-full mt-0 data-[state=inactive]:hidden">
-                            <ScrollArea className="h-full">
-                                <div className="px-5 py-5 w-full">
-                                    <ThresholdsTab thresholds={localThresholds} onSaved={setLocalThresholds} />
+                        <div className="p-3 space-y-2 flex-1">
+                            {workspaces.map(ws => {
+                                const WSIcon  = ws.icon;
+                                const mc      = aiModeCfg[ws.aiMode];
+                                const isActive = ws.id === activeAgency;
+                                return (
+                                    <button key={ws.id} onClick={() => setActiveAgency(ws.id)}
+                                            className={`w-full flex flex-col gap-2 p-3 rounded-xl border text-left transition-all ${
+                                                isActive ? `${ws.bg} ${ws.border} ring-2 ring-current/50 scale-[1.02]` : "border-white/8 bg-white/[0.02] hover:border-white/15"
+                                            }`}>
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                                <WSIcon className={`w-4 h-4 ${ws.color}`}/>
+                                                <span className={`text-[11px] font-bold ${isActive ? ws.color : "text-white/55"}`}>{ws.label}</span>
+                                            </div>
+                                            {ws.pendingActions > 0 && (
+                                                <span className="text-[10px] font-bold font-mono text-amber-400">{ws.pendingActions}</span>
+                                            )}
+                                        </div>
+                                        <div className={`flex items-center gap-1.5 text-[9px] px-1.5 py-0.5 rounded-md self-start ${mc.bg} ${mc.border} border ${mc.color}`}>
+                                            <span className={`w-1.5 h-1.5 rounded-full ${mc.color.replace("text-","bg-")}`}/>
+                                            {mc.label}
+                                        </div>
+                                        <div className="text-[9px] text-white/30 flex items-center gap-1">
+                                            <User className="w-3 h-3"/>{ws.operatorOnDuty}
+                                            <span className="text-white/15 ml-auto">{ws.lastActivity}</span>
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        {/* Global AI mode summary */}
+                        <div className="px-3 pb-3 border-t border-white/8 pt-3 space-y-1.5">
+                            <div className="text-[9px] uppercase tracking-widest text-white/25 font-bold mb-2">Global AI Status</div>
+                            {workspaces.map(ws => {
+                                const mc = aiModeCfg[ws.aiMode];
+                                return (
+                                    <div key={ws.id} className="flex items-center gap-2 text-[10px]">
+                                        <span className={`w-1.5 h-1.5 rounded-full ${mc.color.replace("text-","bg-")} shrink-0`}/>
+                                        <span className="text-white/35 flex-1 truncate">{ws.shortLabel}</span>
+                                        <span className={`font-bold ${mc.color}`}>{mc.label.split(" ")[0]}</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </aside>
+
+                    {/* CENTER — WORKSPACE */}
+                    <div className="flex-1 flex flex-col overflow-hidden">
+                        {/* Agency workspace header */}
+                        <div className={`px-6 py-4 border-b border-white/8 flex items-center justify-between gap-4 ${currentWS.bg}/20`}>
+                            <div className="flex items-center gap-3">
+                                <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${currentWS.bg} border ${currentWS.border}`}>
+                                    <CurrentIcon className={`w-5 h-5 ${currentWS.color}`}/>
                                 </div>
-                            </ScrollArea>
-                        </TabsContent>
-                        <TabsContent value="history" className="h-full mt-0 data-[state=inactive]:hidden">
-                            <ScrollArea className="h-full">
-                                <div className="px-5 py-5 w-full"><HistoryTab transitions={transitions} /></div>
-                            </ScrollArea>
-                        </TabsContent>
-                        <TabsContent value="analytics" className="h-full mt-0 data-[state=inactive]:hidden">
-                            <ScrollArea className="h-full">
-                                <div className="px-5 py-5 w-full"><AnalyticsTab transitions={transitions} /></div>
-                            </ScrollArea>
-                        </TabsContent>
+                                <div>
+                                    <div className="flex items-center gap-2">
+                                        <h1 className="text-sm font-bold text-white">{currentWS.label}</h1>
+                                        <Badge variant="outline" className={`text-[10px] ${aiModeCfg[currentWS.aiMode].color} ${aiModeCfg[currentWS.aiMode].border}`}>
+                                            {aiModeCfg[currentWS.aiMode].label}
+                                        </Badge>
+                                        {currentWS.pendingActions > 0 && (
+                                            <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/40 text-[10px]">
+                                                {currentWS.pendingActions} pending
+                                            </Badge>
+                                        )}
+                                    </div>
+                                    <div className="text-[11px] text-white/40 mt-0.5">{currentWS.description}</div>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                        <Button size="sm" variant="outline" className="h-8 text-[11px] border-white/15 text-white/50 hover:bg-white/5 gap-1.5">
+                                            <Settings className="w-3.5 h-3.5"/>Workspace Controls
+                                        </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end" className="bg-zinc-900 border-white/10">
+                                        <DropdownMenuLabel className="text-[10px] text-white/30">{currentWS.label} Actions</DropdownMenuLabel>
+                                        <DropdownMenuSeparator className="bg-white/10"/>
+                                        {[
+                                            { icon: Lock,      c: "text-amber-400", l: "Lock All AI for Agency" },
+                                            { icon: ShieldOff, c: "text-red-400",   l: "Emergency Disable AI" },
+                                            { icon: Eye,       c: "text-cyan-400",  l: "View Audit Trail" },
+                                            { icon: Zap,       c: "text-emerald-400",l:"Push All Pending Actions" },
+                                        ].map(m => (
+                                            <DropdownMenuItem key={m.l} className="text-xs text-white/60 focus:bg-white/5 gap-2">
+                                                <m.icon className={`w-3.5 h-3.5 ${m.c}`}/>{m.l}
+                                            </DropdownMenuItem>
+                                        ))}
+                                    </DropdownMenuContent>
+                                </DropdownMenu>
+                            </div>
+                        </div>
+
+                        {/* Tabs */}
+                        <Tabs defaultValue="modules" className="flex-1 flex flex-col overflow-hidden">
+                            <div className="px-6 pt-3 border-b border-white/8">
+                                <TabsList className="bg-white/5 border border-white/10 h-8 p-0.5 gap-0.5">
+                                    {[
+                                        { v:"modules",   l:"Control Modules", icon: LayoutGrid },
+                                        { v:"aimode",    l:"AI Mode",          icon: Brain },
+                                        { v:"signals",   l:"Signal Corridors", icon: Signal },
+                                        { v:"routes",    l:"Route Modes",      icon: Route },
+                                        { v:"phases",    l:"Phase Roadmap",    icon: Layers },
+                                        { v:"crossagency",l:"Cross-Agency",   icon: Workflow },
+                                    ].map(t => (
+                                        <TabsTrigger key={t.v} value={t.v}
+                                                     className="h-7 px-3 text-[11px] data-[state=active]:bg-white/10 data-[state=active]:text-white text-white/40 rounded flex items-center gap-1.5">
+                                            <t.icon className="w-3 h-3"/>{t.l}
+                                        </TabsTrigger>
+                                    ))}
+                                </TabsList>
+                            </div>
+
+                            {/* CONTROL MODULES */}
+                            <TabsContent value="modules" className="flex-1 overflow-auto px-6 pb-6 pt-4 mt-0">
+                                <div className="flex items-center justify-between mb-4">
+                                    <div>
+                                        <div className="text-sm font-bold text-white">{currentWS.label} · Active Modules</div>
+                                        <div className="text-[11px] text-white/40">Modular control units assigned to this agency</div>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-400">
+                                            {agencyModules.filter(m => m.status === "active").length} Active
+                                        </Badge>
+                                        <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-400">
+                                            {agencyModules.filter(m => m.status === "standby").length} Standby
+                                        </Badge>
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    {agencyModules.map(mod => <ControlModuleCard key={mod.id} mod={mod}/>)}
+                                </div>
+                                {agencyModules.length === 0 && (
+                                    <div className="flex flex-col items-center justify-center py-16 text-white/20 gap-3">
+                                        <LayoutGrid className="w-10 h-10"/>
+                                        <span className="text-sm">No modules assigned to this agency</span>
+                                    </div>
+                                )}
+                            </TabsContent>
+
+                            {/* AI MODE */}
+                            <TabsContent value="aimode" className="flex-1 overflow-auto px-6 pb-6 pt-4 mt-0">
+                                <div className="grid grid-cols-2 gap-6">
+                                    {/* Per-agency AI mode configurator */}
+                                    <div className="space-y-5">
+                                        <div>
+                                            <div className="text-sm font-bold text-white mb-1">{currentWS.label} AI Mode</div>
+                                            <div className="text-[11px] text-white/40">Configure how AI operates within this agency's jurisdiction</div>
+                                        </div>
+                                        <AgencyAIModeSelector
+                                            mode={currentWS.aiMode}
+                                            onChange={m => updateAgencyMode(activeAgency, m)}
+                                            agencyColor={currentWS.color}
+                                        />
+
+                                        {/* Jurisdiction */}
+                                        <div className={`rounded-xl border p-4 ${currentWS.bg} ${currentWS.border}`}>
+                                            <div className="text-[10px] uppercase tracking-widest text-white/35 mb-2">Jurisdiction</div>
+                                            <div className="space-y-1.5">
+                                                {currentWS.jurisdiction.map(j => (
+                                                    <div key={j} className="flex items-center gap-2 text-[11px] text-white/55">
+                                                        <CheckCircle2 className={`w-3 h-3 ${currentWS.color} shrink-0`}/>{j}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {/* Mode implications */}
+                                        <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-2.5">
+                                            <div className="text-[10px] uppercase tracking-widest text-white/35 mb-1">Mode Implications</div>
+                                            {aiModeCfg[currentWS.aiMode].label === "AI Disabled" ? (
+                                                <div className="flex gap-2 items-start text-[11px] text-red-300/70">
+                                                    <ShieldOff className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5"/>
+                                                    AI is fully disabled for this agency. All actions require manual operator input.
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    {[
+                                                        { icon: Brain,  c: "text-cyan-400",    t: `AI running for ${currentWS.label}` },
+                                                        { icon: Eye,    c: "text-white/40",    t: "All AI actions visible in audit trail" },
+                                                        { icon: Shield, c: "text-amber-400",   t: "Human override always available" },
+                                                        { icon: Zap,    c: "text-emerald-400", t: currentWS.aiMode === "full_auto" ? "Auto-execution active within policy" : currentWS.aiMode === "assisted" ? "Executes within thresholds; alerts on exceptions" : "Requires manual approval for all actions" },
+                                                    ].map((item, i) => (
+                                                        <div key={i} className="flex items-center gap-2 text-[11px] text-white/50">
+                                                            <item.icon className={`w-3.5 h-3.5 ${item.c} shrink-0`}/>{item.t}
+                                                        </div>
+                                                    ))}
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* All agencies overview */}
+                                    <div className="space-y-3">
+                                        <div className="text-[11px] uppercase tracking-widest text-white/35 font-bold">All Agency Modes</div>
+                                        {workspaces.map(ws => {
+                                            const mc = aiModeCfg[ws.aiMode];
+                                            const WSIcon = ws.icon;
+                                            return (
+                                                <div key={ws.id} className={`rounded-xl border p-4 ${mc.bg} ${mc.border}`}>
+                                                    <div className="flex items-center justify-between mb-2">
+                                                        <div className="flex items-center gap-2">
+                                                            <WSIcon className={`w-4 h-4 ${ws.color}`}/>
+                                                            <span className={`text-xs font-bold ${ws.color}`}>{ws.label}</span>
+                                                        </div>
+                                                        <Badge variant="outline" className={`text-[9px] ${mc.color} ${mc.border}`}>{mc.label}</Badge>
+                                                    </div>
+                                                    <p className="text-[10px] text-white/40 leading-snug mb-2">{mc.desc}</p>
+                                                    {/* Quick mode toggle */}
+                                                    <div className="flex gap-1.5">
+                                                        {(["assisted","operator","disabled"] as AgencyAIMode[]).map(m => (
+                                                            <button key={m} onClick={() => updateAgencyMode(ws.id, m)}
+                                                                    className={`flex-1 py-1 rounded text-[9px] font-bold border transition-all ${
+                                                                        ws.aiMode === m ? `${aiModeCfg[m].bg} ${aiModeCfg[m].border} ${aiModeCfg[m].color}` : "border-white/8 text-white/25 hover:border-white/20"
+                                                                    }`}>
+                                                                {m === "assisted" ? "Assist" : m === "operator" ? "Manual" : "Off"}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            </TabsContent>
+
+                            {/* SIGNAL CORRIDORS */}
+                            <TabsContent value="signals" className="flex-1 overflow-auto px-6 pb-6 pt-4 mt-0 space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <div className="text-sm font-bold text-white">Signal Corridor Modes</div>
+                                        <div className="text-[11px] text-white/40">Per-corridor signal control · AI executes within city authority policy thresholds</div>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <Badge variant="outline" className="text-[10px] border-cyan-500/40 text-cyan-400">
+                                            <Brain className="w-2.5 h-2.5 mr-1"/>{SIGNAL_CORRIDORS.filter(s => s.mode === "ai_managed").length} AI Managed
+                                        </Badge>
+                                        <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-400">
+                                            {SIGNAL_CORRIDORS.filter(s => s.priorityActive).length} Priority Active
+                                        </Badge>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-3">
+                                    {agencyCorridors.map(corr => {
+                                        const SigIcon = signalModeCfg[corr.mode].icon;
+                                        const gap = corr.aiRecommendedGreen - corr.avgGreenTime;
+                                        return (
+                                            <div key={corr.id} className={`rounded-xl border p-4 transition-all ${
+                                                corr.priorityActive ? "border-cyan-500/20 bg-cyan-500/5" :
+                                                    corr.mode === "fixed" ? "border-white/15 bg-white/[0.02] opacity-80" :
+                                                        "border-white/10 bg-white/[0.02]"
+                                            }`}>
+                                                <div className="flex items-start justify-between gap-3 mb-3">
+                                                    <div>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-xs font-bold text-white/85">{corr.name} Corridor</span>
+                                                            {corr.priorityActive && (
+                                                                <Badge variant="outline" className="text-[9px] border-cyan-500/50 text-cyan-400 animate-pulse">PRIORITY</Badge>
+                                                            )}
+                                                            {corr.lockedBy && (
+                                                                <Badge variant="outline" className="text-[9px] border-amber-500/40 text-amber-400">
+                                                                    <Lock className="w-2.5 h-2.5 mr-1"/>Locked
+                                                                </Badge>
+                                                            )}
+                                                        </div>
+                                                        <div className="text-[10px] text-white/30 font-mono">{corr.id} · {corr.signals} signals · Route {corr.routeId}</div>
+                                                    </div>
+                                                    <div className={`flex items-center gap-1 text-[11px] ${signalModeCfg[corr.mode].color}`}>
+                                                        <SigIcon className="w-3.5 h-3.5"/>
+                                                        {signalModeCfg[corr.mode].label}
+                                                    </div>
+                                                </div>
+
+                                                <div className="grid grid-cols-4 gap-2 mb-3">
+                                                    {[
+                                                        { l: "Current Green", v: `${corr.avgGreenTime}s`,       c: "text-white/60" },
+                                                        { l: "AI Recommends", v: `${corr.aiRecommendedGreen}s`, c: "text-cyan-400" },
+                                                        { l: "Cycle Length",  v: `${corr.cycleLength}s`,        c: "text-white/50" },
+                                                        { l: "PSV Flow",      v: `${corr.psvThroughput}/hr`,    c: gap > 5 ? "text-amber-400" : "text-emerald-400" },
+                                                    ].map(s => (
+                                                        <div key={s.l} className="rounded-md border border-white/8 bg-white/[0.02] p-2 text-center">
+                                                            <div className={`text-xs font-bold font-mono ${s.c}`}>{s.v}</div>
+                                                            <div className="text-[9px] text-white/25 mt-0.5 leading-tight">{s.l}</div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+
+                                                {gap > 0 && corr.mode !== "fixed" && (
+                                                    <div className="flex items-center gap-1.5 text-[10px] text-amber-300/70 mb-3">
+                                                        <Brain className="w-3 h-3 text-cyan-400/60 shrink-0"/>
+                                                        AI recommends +{gap}s green phase · last adj. {corr.lastAdjusted}
+                                                    </div>
+                                                )}
+
+                                                <div className="flex gap-2">
+                                                    {corr.mode !== "fixed" && gap > 0 && (
+                                                        <Button size="sm" className="flex-1 h-7 text-[11px] bg-cyan-700 hover:bg-cyan-600 text-white border-0 gap-1">
+                                                            <CheckCircle2 className="w-3 h-3"/>Apply AI Timing
+                                                        </Button>
+                                                    )}
+                                                    <Sheet open={signalSheet?.id === corr.id} onOpenChange={o => !o && setSignalSheet(null)}>
+                                                        <SheetTrigger asChild>
+                                                            <Button size="sm" variant="outline"
+                                                                    className={`${corr.mode !== "fixed" && gap > 0 ? "flex-1" : "flex-[2]"} h-7 text-[11px] border-amber-500/40 text-amber-400 hover:bg-amber-500/10 gap-1`}
+                                                                    onClick={() => setSignalSheet(corr)}>
+                                                                <Edit3 className="w-3 h-3"/>Manual Override
+                                                            </Button>
+                                                        </SheetTrigger>
+                                                        <SheetContent side="right" className="w-[420px] bg-[#111316] border-l border-white/10 text-white">
+                                                            <SheetHeader>
+                                                                <SheetTitle className="text-white flex items-center gap-2">
+                                                                    <Signal className="w-4 h-4 text-cyan-400"/>Signal Override
+                                                                </SheetTitle>
+                                                            </SheetHeader>
+                                                            {signalSheet && <SignalOverrideSheet corridor={signalSheet} onClose={() => setSignalSheet(null)}/>}
+                                                        </SheetContent>
+                                                    </Sheet>
+                                                    {corr.mode === "fixed" && (
+                                                        <Button size="sm" variant="outline" className="flex-1 h-7 text-[11px] border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 gap-1">
+                                                            <Unlock className="w-3 h-3"/>Release to AI
+                                                        </Button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </TabsContent>
+
+                            {/* ROUTE MODES */}
+                            <TabsContent value="routes" className="flex-1 overflow-auto px-6 pb-6 pt-4 mt-0">
+                                <div className="flex items-center justify-between mb-4">
+                                    <div>
+                                        <div className="text-sm font-bold text-white">Route Mode Control</div>
+                                        <div className="text-[11px] text-white/40">Per-route AI routing, signal, and compliance mode — govern only routes in your jurisdiction</div>
+                                    </div>
+                                </div>
+                                <div className="rounded-xl border border-white/10 overflow-hidden">
+                                    <Table>
+                                        <TableHeader>
+                                            <TableRow className="border-white/10 hover:bg-transparent">
+                                                {["Route","Corridor","Status","AI Routing","Signal Mode","Compliance","Efficiency","Governing","Phase",""].map(h => (
+                                                    <TableHead key={h} className="text-[10px] tracking-widest text-white/25 uppercase bg-white/[0.03] font-semibold h-9 whitespace-nowrap">{h}</TableHead>
+                                                ))}
+                                            </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {agencyRoutes.map(r => {
+                                                const sc = routeStatusCfg[r.status];
+                                                const SigIcon = signalModeCfg[r.signalMode].icon;
+                                                const ph = phaseCfg[r.phase];
+                                                return (
+                                                    <TableRow key={r.id} className="border-white/6 hover:bg-white/[0.03]">
+                                                        <TableCell className="py-3">
+                                                            <div className="flex items-center gap-1.5">
+                                                                <span className={`w-1.5 h-1.5 rounded-full ${sc.dot} ${r.status === "critical" ? "animate-pulse" : ""}`}/>
+                                                                <span className="text-xs font-mono font-bold text-white/70">{r.id}</span>
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell className="text-xs text-white/50 whitespace-nowrap">{r.corridor}</TableCell>
+                                                        <TableCell>
+                                                            <Badge variant="outline" className={`text-[9px] ${sc.color} border-current whitespace-nowrap`}>{sc.label}</Badge>
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            {r.aiLocked
+                                                                ? <div className="flex items-center gap-1 text-[10px] text-amber-400"><Lock className="w-3 h-3"/>Locked</div>
+                                                                : r.aiRoutingActive
+                                                                    ? <div className="flex items-center gap-1 text-[10px] text-cyan-400"><Brain className="w-3 h-3"/>Active</div>
+                                                                    : <div className="flex items-center gap-1 text-[10px] text-white/30"><ShieldOff className="w-3 h-3"/>Off</div>
+                                                            }
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <div className={`flex items-center gap-1 text-[10px] ${signalModeCfg[r.signalMode].color}`}>
+                                                                <SigIcon className="w-3 h-3"/>{signalModeCfg[r.signalMode].label.split(" ")[0]}
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell className={`text-xs font-mono ${r.complianceRate >= 85 ? "text-emerald-400" : r.complianceRate >= 70 ? "text-amber-400" : "text-red-400"}`}>
+                                                            {r.complianceRate}%
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <div className="w-16 space-y-0.5">
+                                                                <span className={`text-[10px] font-mono ${sc.color}`}>{r.efficiency}%</span>
+                                                                <div className="h-1 rounded-full bg-white/10 overflow-hidden">
+                                                                    <div className={`h-full rounded-full ${sc.bar}`} style={{ width: `${r.efficiency}%` }}/>
+                                                                </div>
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <div className="flex gap-1 flex-wrap">
+                                                                {r.governedBy.map(ag => {
+                                                                    const AIcon = agencyCfg[ag].icon;
+                                                                    return (
+                                                                        <Tooltip key={ag}>
+                                                                            <TooltipTrigger asChild>
+                                                                                <div className={`w-5 h-5 rounded-md flex items-center justify-center ${agencyCfg[ag].bg} border ${agencyCfg[ag].border}`}>
+                                                                                    <AIcon className={`w-3 h-3 ${agencyCfg[ag].color}`}/>
+                                                                                </div>
+                                                                            </TooltipTrigger>
+                                                                            <TooltipContent className="bg-zinc-800 border-white/10 text-xs">{agencyCfg[ag].label}</TooltipContent>
+                                                                        </Tooltip>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <Badge variant="outline" className={`text-[9px] ${ph.color} ${ph.border}`}>P{r.phase}</Badge>
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <DropdownMenu>
+                                                                <DropdownMenuTrigger asChild>
+                                                                    <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px] text-white/35 hover:bg-white/5 gap-1">
+                                                                        <Settings className="w-3 h-3"/>
+                                                                    </Button>
+                                                                </DropdownMenuTrigger>
+                                                                <DropdownMenuContent align="end" className="bg-zinc-900 border-white/10">
+                                                                    <DropdownMenuLabel className="text-[10px] text-white/30">{r.name}</DropdownMenuLabel>
+                                                                    <DropdownMenuSeparator className="bg-white/10"/>
+                                                                    <DropdownMenuItem className="text-xs text-white/60 focus:bg-white/5 gap-2">
+                                                                        {r.aiRoutingActive ? <><ShieldOff className="w-3.5 h-3.5 text-red-400"/>Disable AI Routing</> : <><Brain className="w-3.5 h-3.5 text-cyan-400"/>Enable AI Routing</>}
+                                                                    </DropdownMenuItem>
+                                                                    <DropdownMenuItem className="text-xs text-white/60 focus:bg-white/5 gap-2">
+                                                                        <Lock className="w-3.5 h-3.5 text-amber-400"/>Lock from AI Changes
+                                                                    </DropdownMenuItem>
+                                                                </DropdownMenuContent>
+                                                            </DropdownMenu>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                );
+                                            })}
+                                        </TableBody>
+                                    </Table>
+                                </div>
+                            </TabsContent>
+
+                            {/* PHASE ROADMAP */}
+                            <TabsContent value="phases" className="flex-1 overflow-auto px-6 pb-6 pt-4 mt-0 space-y-5">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <div className="text-sm font-bold text-white">System Phase Roadmap</div>
+                                        <div className="text-[11px] text-white/40">Incremental rollout strategy · Modular capability expansion by phase</div>
+                                    </div>
+                                    <Badge variant="outline" className={`text-[10px] ${phaseCfg[SYSTEM_PHASE].color} ${phaseCfg[SYSTEM_PHASE].border}`}>
+                                        Phase {SYSTEM_PHASE} Active
+                                    </Badge>
+                                </div>
+
+                                {/* Impact simulator */}
+                                <Card className="bg-white/[0.02] border-violet-500/20">
+                                    <CardHeader className="pb-2 pt-4 px-4">
+                                        <CardTitle className="text-xs text-white/60 font-semibold tracking-widest uppercase flex items-center gap-2">
+                                            <Focus className="w-3.5 h-3.5 text-violet-400"/>Network Impact Simulator · Phase 3 Preview
+                                        </CardTitle>
+                                    </CardHeader>
+                                    <CardContent className="px-4 pb-4 space-y-4">
+                                        <div className="text-[11px] text-white/40">Simulate projected network improvements if Phase 3 infrastructure changes are implemented:</div>
+                                        <div className="space-y-2">
+                                            <div className="flex justify-between text-[10px]">
+                                                <span className="text-white/40">Interventions modelled</span>
+                                                <span className="text-violet-400 font-bold font-mono">{Math.round(simValue[0] / 100 * 4)} / 4 infra changes</span>
+                                            </div>
+                                            <Slider value={simValue} onValueChange={setSimValue} min={0} max={100} step={25}/>
+                                        </div>
+                                        <div className="grid grid-cols-4 gap-2">
+                                            {[
+                                                { label: "Congestion ↓",    v: `${Math.round(simValue[0] * 0.18)}%`,    c: "text-emerald-400" },
+                                                { label: "Avg Time Saving",  v: `${Math.round(simValue[0] * 0.12)} min`, c: "text-cyan-400" },
+                                                { label: "Routes Impacted",  v: `${Math.round(simValue[0] / 100 * 5)}/6`,c: "text-amber-400" },
+                                                { label: "Signal Efficiency",v: `+${Math.round(simValue[0] * 0.08)}%`,   c: "text-violet-400" },
+                                            ].map(s => (
+                                                <div key={s.label} className="rounded-md border border-white/8 bg-white/[0.02] p-2.5 text-center">
+                                                    <div className={`text-base font-bold font-mono ${s.c}`}>{s.v}</div>
+                                                    <div className="text-[9px] text-white/25 mt-0.5 leading-tight">{s.label}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </CardContent>
+                                </Card>
+
+                                {/* Phase cards */}
+                                <div className="space-y-4">
+                                    {PHASE_MODULES.map(pm => {
+                                        const pc = phaseCfg[pm.phase];
+                                        const isActive = pm.phase === SYSTEM_PHASE;
+                                        const isPast   = pm.phase < SYSTEM_PHASE;
+                                        return (
+                                            <div key={pm.phase} className={`rounded-xl border p-5 transition-all ${
+                                                isActive ? `${pc.bg} ${pc.border} ring-1 ring-current/30` :
+                                                    isPast   ? "border-emerald-500/15 bg-emerald-500/5 opacity-80" :
+                                                        "border-white/8 bg-white/[0.02] opacity-60"
+                                            }`}>
+                                                <div className="flex items-start justify-between gap-3 mb-3">
+                                                    <div>
+                                                        <div className="flex items-center gap-2.5 mb-1">
+                                                            <Badge variant="outline" className={`text-[10px] ${pc.color} ${pc.border}`}>Phase {pm.phase}</Badge>
+                                                            {isActive && <Badge className="text-[9px] bg-cyan-500/20 text-cyan-400 border-cyan-500/40 border">CURRENT</Badge>}
+                                                            {isPast   && <Badge className="text-[9px] bg-emerald-500/15 text-emerald-400 border-emerald-500/30 border">COMPLETE</Badge>}
+                                                            {!isActive && !isPast && <Badge className="text-[9px] bg-white/5 text-white/30 border-white/15 border">PENDING</Badge>}
+                                                        </div>
+                                                        <div className="text-sm font-bold text-white/85">{pm.label}</div>
+                                                    </div>
+                                                    <div className="text-right shrink-0">
+                                                        <div className={`text-xl font-bold font-mono ${pc.color}`}>{pm.completion}%</div>
+                                                        <div className="text-[10px] text-white/30">{pm.targetDate}</div>
+                                                    </div>
+                                                </div>
+
+                                                <p className="text-[11px] text-white/45 leading-relaxed mb-4">{pm.description}</p>
+
+                                                <div className="mb-4">
+                                                    <div className="flex justify-between text-[10px] mb-1">
+                                                        <span className="text-white/30">Completion</span>
+                                                        <span className={`${pc.color} font-mono`}>{pm.completion}%</span>
+                                                    </div>
+                                                    <Progress value={pm.completion} className="h-1.5 bg-white/10"/>
+                                                </div>
+
+                                                <div className="grid grid-cols-2 gap-4">
+                                                    <div>
+                                                        <div className="text-[9px] uppercase tracking-widest text-white/25 mb-1.5">Features</div>
+                                                        <div className="space-y-1">
+                                                            {pm.features.map(f => (
+                                                                <div key={f} className="flex items-center gap-1.5 text-[10px] text-white/50">
+                                                                    <CheckCircle2 className={`w-3 h-3 ${isPast || isActive ? pc.color : "text-white/20"} shrink-0`}/>{f}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-[9px] uppercase tracking-widest text-white/25 mb-1.5">AI Capabilities</div>
+                                                        <div className="space-y-1">
+                                                            {pm.aiCapabilities.map(c => (
+                                                                <div key={c} className="flex items-center gap-1.5 text-[10px] text-white/50">
+                                                                    <Brain className={`w-3 h-3 text-cyan-400/50 shrink-0`}/>{c}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </TabsContent>
+
+                            {/* CROSS-AGENCY */}
+                            <TabsContent value="crossagency" className="flex-1 overflow-auto px-6 pb-6 pt-4 mt-0 space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <div className="text-sm font-bold text-white">Cross-Agency Coordination</div>
+                                        <div className="text-[11px] text-white/40">Conflicts, handoffs, and joint actions requiring multi-agency coordination</div>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <Badge variant="outline" className="text-[10px] border-red-500/40 text-red-400">
+                                            {crossItems.filter(c => c.status === "pending" && c.priority === "high").length} High Priority
+                                        </Badge>
+                                        <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-400">
+                                            {crossItems.filter(c => c.status === "resolved").length} Resolved
+                                        </Badge>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-3">
+                                    {crossItems.map(item => {
+                                        const typeCfg = {
+                                            conflict:     { color: "text-red-400",    bg: "bg-red-500/10 border-red-500/25",     icon: X },
+                                            coordination: { color: "text-cyan-400",   bg: "bg-cyan-500/10 border-cyan-500/25",   icon: Workflow },
+                                            handoff:      { color: "text-violet-400", bg: "bg-violet-500/10 border-violet-500/25",icon: ArrowRight },
+                                        }[item.type];
+                                        const prioCfg = {
+                                            high:   "text-red-400",
+                                            medium: "text-amber-400",
+                                            low:    "text-white/35",
+                                        }[item.priority];
+                                        const statusCfg2 = {
+                                            pending:  { color: "text-amber-400",   border: "border-amber-500/40" },
+                                            active:   { color: "text-cyan-400",    border: "border-cyan-500/40" },
+                                            resolved: { color: "text-emerald-400", border: "border-emerald-500/40" },
+                                        }[item.status];
+                                        const TypeIcon = typeCfg.icon;
+
+                                        return (
+                                            <div key={item.id} className={`rounded-xl border p-4 ${typeCfg.bg} ${item.status === "resolved" ? "opacity-60" : ""}`}>
+                                                <div className="flex items-start justify-between gap-2 mb-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <div className={`p-1.5 rounded-md ${item.type === "conflict" ? "bg-red-500/15" : item.type === "coordination" ? "bg-cyan-500/15" : "bg-violet-500/15"}`}>
+                                                            <TypeIcon className={`w-3.5 h-3.5 ${typeCfg.color}`}/>
+                                                        </div>
+                                                        <div>
+                                                            <div className="text-[10px] font-mono text-white/30">{item.id} · {item.timestamp}</div>
+                                                            <div className="text-xs font-bold text-white/85">{item.subject}</div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className={`text-[9px] font-bold uppercase ${prioCfg}`}>{item.priority}</span>
+                                                        <Badge variant="outline" className={`text-[9px] capitalize ${statusCfg2.color} ${statusCfg2.border}`}>{item.status}</Badge>
+                                                    </div>
+                                                </div>
+
+                                                <p className="text-[11px] text-white/50 leading-relaxed mb-3">{item.description}</p>
+
+                                                {/* Involved agencies */}
+                                                <div className="flex items-center gap-2 mb-3">
+                                                    <span className="text-[9px] text-white/25">Involves:</span>
+                                                    {item.agencies.map((ag, i) => {
+                                                        const ac = agencyCfg[ag];
+                                                        const AIcon = ac.icon;
+                                                        return (
+                                                            <div key={ag} className="flex items-center">
+                                                                <div className={`flex items-center gap-1 text-[10px] ${ac.color} px-1.5 py-0.5 rounded border ${ac.border} ${ac.bg}`}>
+                                                                    <AIcon className="w-3 h-3"/>{ac.label.split(" ")[0]}
+                                                                </div>
+                                                                {i < item.agencies.length - 1 && <ArrowRight className="w-3 h-3 text-white/20 mx-1"/>}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+
+                                                {item.status !== "resolved" && (
+                                                    <div className="flex gap-2">
+                                                        <Button size="sm" className="flex-1 h-7 text-[11px] bg-emerald-700 hover:bg-emerald-600 text-white border-0 gap-1">
+                                                            <CheckCircle2 className="w-3 h-3"/>Mark Resolved
+                                                        </Button>
+                                                        <Button size="sm" variant="outline" className="flex-1 h-7 text-[11px] border-white/15 text-white/40 hover:bg-white/5 gap-1">
+                                                            <ArrowUpRight className="w-3 h-3"/>Escalate
+                                                        </Button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+
+                                    {crossItems.length === 0 && (
+                                        <div className="flex flex-col items-center justify-center py-16 text-white/20 gap-3">
+                                            <BadgeCheck className="w-10 h-10 text-emerald-400/30"/>
+                                            <span className="text-sm">No cross-agency items for {currentWS.label}</span>
+                                        </div>
+                                    )}
+                                </div>
+                            </TabsContent>
+                        </Tabs>
                     </div>
-                </Tabs>
+
+                    {/* RIGHT — QUICK STATUS */}
+                    <aside className="w-64 shrink-0 border-l border-white/8 flex flex-col">
+                        <div className="px-4 py-3 border-b border-white/8 flex items-center gap-2">
+                            <Activity className="w-4 h-4 text-white/40"/>
+                            <span className="text-[11px] font-bold tracking-widest text-white/60 uppercase">System Status</span>
+                        </div>
+
+                        <ScrollArea className="flex-1">
+                            <div className="p-4 space-y-4">
+
+                                {/* Agency quick stats */}
+                                {workspaces.map(ws => {
+                                    const WSIcon = ws.icon;
+                                    const mc = aiModeCfg[ws.aiMode];
+                                    return (
+                                        <div key={ws.id} className={`rounded-lg border p-3 cursor-pointer transition-all hover:ring-1 hover:ring-white/15 ${
+                                            activeAgency === ws.id ? `${ws.bg} ${ws.border}` : "border-white/8 bg-white/[0.02]"
+                                        }`} onClick={() => setActiveAgency(ws.id)}>
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <WSIcon className={`w-4 h-4 ${ws.color}`}/>
+                                                <span className={`text-[11px] font-bold ${ws.color}`}>{ws.shortLabel}</span>
+                                                <div className="flex-1"/>
+                                                {ws.pendingActions > 0 && (
+                                                    <span className="text-[10px] font-bold text-amber-400">{ws.pendingActions}</span>
+                                                )}
+                                            </div>
+                                            <div className={`text-[9px] px-1.5 py-0.5 rounded border inline-flex items-center gap-1 ${mc.bg} ${mc.border} ${mc.color} mb-1.5`}>
+                                                <span className={`w-1.5 h-1.5 rounded-full ${mc.color.replace("text-","bg-")}`}/>
+                                                {mc.label}
+                                            </div>
+                                            <div className="text-[9px] text-white/25 flex items-center gap-1">
+                                                <User className="w-3 h-3"/>{ws.operatorOnDuty} · {ws.lastActivity}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+
+                                {/* Signal summary */}
+                                <Card className="bg-white/[0.02] border-white/10">
+                                    <CardHeader className="pb-2 pt-3 px-3">
+                                        <CardTitle className="text-[10px] text-white/40 font-semibold tracking-widest uppercase flex items-center gap-1.5">
+                                            <Signal className="w-3 h-3 text-cyan-400"/>Signal Corridors
+                                        </CardTitle>
+                                    </CardHeader>
+                                    <CardContent className="px-3 pb-3 space-y-1.5">
+                                        {SIGNAL_CORRIDORS.map(sc => {
+                                            const SiI = signalModeCfg[sc.mode].icon;
+                                            return (
+                                                <div key={sc.id} className="flex items-center gap-2 text-[10px]">
+                                                    <SiI className={`w-3 h-3 ${signalModeCfg[sc.mode].color} shrink-0`}/>
+                                                    <span className="text-white/45 flex-1 truncate">{sc.name}</span>
+                                                    {sc.priorityActive && <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse shrink-0"/>}
+                                                </div>
+                                            );
+                                        })}
+                                    </CardContent>
+                                </Card>
+
+                                {/* Phase progress */}
+                                <Card className="bg-white/[0.02] border-white/10">
+                                    <CardHeader className="pb-2 pt-3 px-3">
+                                        <CardTitle className="text-[10px] text-white/40 font-semibold tracking-widest uppercase flex items-center gap-1.5">
+                                            <Layers className="w-3 h-3 text-cyan-400"/>Rollout Progress
+                                        </CardTitle>
+                                    </CardHeader>
+                                    <CardContent className="px-3 pb-3 space-y-2.5">
+                                        {PHASE_MODULES.map(pm => {
+                                            const pc = phaseCfg[pm.phase];
+                                            return (
+                                                <div key={pm.phase} className="space-y-1">
+                                                    <div className="flex justify-between text-[10px]">
+                                                        <span className={pc.color}>Phase {pm.phase}</span>
+                                                        <span className="font-mono text-white/50">{pm.completion}%</span>
+                                                    </div>
+                                                    <Progress value={pm.completion} className="h-1 bg-white/8"/>
+                                                </div>
+                                            );
+                                        })}
+                                    </CardContent>
+                                </Card>
+                            </div>
+                        </ScrollArea>
+                    </aside>
+                </main>
             </div>
         </TooltipProvider>
     );

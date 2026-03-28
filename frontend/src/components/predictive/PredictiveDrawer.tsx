@@ -68,8 +68,10 @@ export function PredictiveDrawer() {
         return () => document.removeEventListener('keydown', onEsc);
     }, []);
 
-    const DRAWER_HEIGHT   = 216;   // px — expanded panel content height
-    const PUSHTAB_HEIGHT  = 36;    // px — always-visible pull-tab
+    const DRAWER_HEIGHT   = 220;   // px — expanded panel content height
+    // Increased from 36 to 42px — the taller pull-tab gives hotspot chips
+    // more vertical room and makes the hit target more comfortable.
+    const PUSHTAB_HEIGHT  = 42;    // px — always-visible pull-tab
 
     return (
         <div
@@ -137,9 +139,9 @@ export function PredictiveDrawer() {
                     </span>
                     <span style={{
                         fontFamily:    'var(--font-mono)',
-                        fontSize:      '0.54rem',
+                        fontSize:      'clamp(0.6rem, 0.78vw, 0.7rem)',
                         fontWeight:    700,
-                        letterSpacing: '0.08em',
+                        letterSpacing: '0.09em',
                         textTransform: 'uppercase',
                         color:         'var(--text-secondary)',
                     }}>
@@ -153,28 +155,29 @@ export function PredictiveDrawer() {
                         <div
                             key={h.label}
                             style={{
-                                display:        'flex',
-                                alignItems:     'center',
-                                gap:            4,
-                                padding:        '2px 8px',
-                                borderRadius:   6,
-                                background:     `${h.color}12`,
-                                border:         `1px solid ${h.color}30`,
-                                flexShrink:     0,
+                                display:     'flex',
+                                alignItems:  'center',
+                                gap:         5,
+                                // Increased vertical padding so chips are more legible
+                                padding:     '3px 10px',
+                                borderRadius: 7,
+                                background:  `${h.color}12`,
+                                border:      `1px solid ${h.color}30`,
+                                flexShrink:  0,
                             }}
                         >
                             <span style={{
-                                width:        5,
-                                height:       5,
+                                width:      6,
+                                height:     6,
                                 borderRadius: '50%',
-                                background:   h.color,
-                                flexShrink:   0,
-                                display:      'inline-block',
-                                animation:    h.level === 'critical' ? 'pulse-dot 1.4s ease infinite' : 'none',
+                                background: h.color,
+                                flexShrink: 0,
+                                display:    'inline-block',
+                                animation:  h.level === 'critical' ? 'pulse-dot 1.4s ease infinite' : 'none',
                             }} />
                             <span style={{
                                 fontFamily:    'var(--font-mono)',
-                                fontSize:      '0.48rem',
+                                fontSize:      'clamp(0.56rem, 0.72vw, 0.66rem)',
                                 color:         h.color,
                                 fontWeight:    700,
                                 whiteSpace:    'nowrap',
@@ -183,7 +186,7 @@ export function PredictiveDrawer() {
                             </span>
                             <span style={{
                                 fontFamily: 'var(--font-mono)',
-                                fontSize:   '0.44rem',
+                                fontSize:   'clamp(0.5rem, 0.65vw, 0.6rem)',
                                 color:      'var(--text-disabled)',
                                 whiteSpace: 'nowrap',
                             }}>
@@ -197,15 +200,15 @@ export function PredictiveDrawer() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                     <span style={{
                         fontFamily:    'var(--font-mono)',
-                        fontSize:      '0.42rem',
+                        fontSize:      'clamp(0.5rem, 0.65vw, 0.6rem)',
                         color:         'var(--text-disabled)',
                         letterSpacing: '0.04em',
                     }}>
                         P
                     </span>
                     {open
-                        ? <ChevronDown size={12} style={{ color: 'var(--text-muted)' }} />
-                        : <ChevronUp   size={12} style={{ color: 'var(--text-muted)' }} />
+                        ? <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />
+                        : <ChevronUp   size={14} style={{ color: 'var(--text-muted)' }} />
                     }
                 </div>
             </div>

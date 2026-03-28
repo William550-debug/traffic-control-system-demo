@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 import {
     APIProvider,
     Map,
@@ -54,6 +54,9 @@ const CAMERAS = [
     { id: 'cam-005', lat: -1.2671, lng: 36.8100, online: true,  label: 'WST-01' },
 ];
 
+// Road names below are Kenyan proper nouns — add them to your project
+// spellcheck dictionary (.cspell.json / .vscode/settings.json) if flagged.
+/* spellchecker: disable */
 const CORRIDOR_LINES = [
     { id: 'corridor-001', name: 'CBD Ring Road',      status: 'blocked'   as CorridorStatus, path: [[-1.2832,36.8172],[-1.2856,36.8195],[-1.2880,36.8220],[-1.2910,36.8235],[-1.2935,36.8218],[-1.2950,36.8192]] },
     { id: 'corridor-002', name: 'Uhuru Highway',      status: 'congested' as CorridorStatus, path: [[-1.2820,36.8163],[-1.2870,36.8163],[-1.2930,36.8163],[-1.2990,36.8163],[-1.3060,36.8163]] },
@@ -61,8 +64,9 @@ const CORRIDOR_LINES = [
     { id: 'corridor-004', name: 'Thika Superhighway', status: 'emergency' as CorridorStatus, path: [[-1.2750,36.8290],[-1.2700,36.8320],[-1.2660,36.8350],[-1.2631,36.8370],[-1.2590,36.8410]] },
     { id: 'corridor-005', name: 'Mombasa Road',       status: 'normal'    as CorridorStatus, path: [[-1.3100,36.8260],[-1.3150,36.8310],[-1.3200,36.8390],[-1.3280,36.8470],[-1.3350,36.8530]] },
 ] as const;
+/* spellchecker: enable */
 
-// ── Colour maps ───────────────────────────
+// ── Color maps ───────────────────────────
 const STATUS_COLOR: Record<string, string> = {
     blocked:   '#ff3b3b',
     emergency: '#ff3b3b',
@@ -98,7 +102,7 @@ function getForecastColor(corridorId: string, slotIndex: number): string {
     const snapshot = MOCK_PREDICTIVE[slotIndex];
     if (!snapshot) return '#3b3f4a';
     const hotspot = snapshot.hotspots.find(h => h.corridorId === corridorId);
-    if (!hotspot) return '#22c55e40'; // no hotspot = faint green
+    if (!hotspot) return '#22c55e40';
     return SEVERITY_COLOR[hotspot.severity] ?? '#3b9eff';
 }
 
@@ -111,12 +115,127 @@ function getHistoricalColor(corridorId: string, hourIndex: number): string {
     return STATUS_COLOR[corridor.status] ?? '#3b3f4a';
 }
 
-// ── Mode banner overlay (HTML over map) ──
+// ── Inject alert-ring keyframes once into <head> ──────────────────────────────
+// AdvancedMarkerElement content is real DOM — we can use CSS animations on it.
+let _keyframesInjected = false;
+function ensureKeyframes() {
+    if (_keyframesInjected || typeof document === 'undefined') return;
+    _keyframesInjected = true;
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes atms-ring-pulse {
+            0%, 100% { opacity: 0.35; transform: scale(1);    }
+            50%       { opacity: 0.08; transform: scale(1.35); }
+        }`;
+    document.head.appendChild(style);
+}
+
+// ── Marker content factory functions ─────────────────────────────────────────
+// These return plain HTMLElement instances for use as AdvancedMarkerElement
+// content — replacing the deprecated google.maps.Marker icon API.
+
+function makeSignalEl(color: string): HTMLElement {
+    const el = document.createElement('div');
+    el.style.cssText = [
+        'width:10px', 'height:10px', 'border-radius:50%',
+        `background:${color}`, 'opacity:0.9',
+        'border:1px solid rgba(255,255,255,0.5)',
+        'pointer-events:none',
+    ].join(';');
+    return el;
+}
+
+function makeCameraEl(color: string, label: string): HTMLElement {
+    const el = document.createElement('div');
+    el.style.cssText = 'display:flex;align-items:center;gap:2px;pointer-events:none;';
+    el.innerHTML = `
+        <svg width="16" height="12" viewBox="-4 -3 11 7"
+             fill="${color}" fill-opacity="0.85"
+             stroke="white" stroke-opacity="0.4" stroke-width="0.8">
+            <rect x="-4" y="-3" width="8" height="6" rx="0.5"/>
+            <polygon points="4,-1.5 7,0 4,1.5"/>
+        </svg>
+        <span style="font-family:monospace;font-size:9px;color:${color};font-weight:600;white-space:nowrap;">${label}</span>
+    `;
+    return el;
+}
+
+function makeAlertEl(opts: {
+    color:      string;
+    radius:     number;
+    alpha:      number;
+    isForecast: boolean;
+}): HTMLElement {
+    ensureKeyframes();
+    const { color, radius, alpha, isForecast } = opts;
+    const outer = (radius + 7) * 2;
+    const inner = radius * 2;
+
+    const el = document.createElement('div');
+    el.style.cssText = [
+        `width:${outer}px`, `height:${outer}px`,
+        'position:relative',
+        'display:flex', 'align-items:center', 'justify-content:center',
+    ].join(';');
+
+    const ring = document.createElement('div');
+    ring.style.cssText = [
+        'position:absolute',
+        `width:${outer}px`, `height:${outer}px`,
+        'border-radius:50%',
+        `background:${color}`,
+        `opacity:${isForecast ? 0.06 : 0.12}`,
+        `border:1px solid ${color}`,
+        ...(!isForecast ? ['animation:atms-ring-pulse 2s ease infinite'] : []),
+    ].join(';');
+
+    const dot = document.createElement('div');
+    dot.style.cssText = [
+        `width:${inner}px`, `height:${inner}px`,
+        'border-radius:50%',
+        `background:${color}`,
+        `opacity:${alpha}`,
+        `border:1.5px solid rgba(255,255,255,${isForecast ? 0.3 : 0.7})`,
+        'position:relative',
+        `cursor:${isForecast ? 'default' : 'pointer'}`,
+    ].join(';');
+
+    el.appendChild(ring);
+    el.appendChild(dot);
+    return el;
+}
+
+function makeCorridorLabelEl(opts: {
+    name:        string;
+    color:       string;
+    isSelected:  boolean;
+    isHistorical:boolean;
+    clickable:   boolean;
+}): HTMLElement {
+    const { name, color, isSelected, isHistorical, clickable } = opts;
+    const el = document.createElement('div');
+    el.style.cssText = [
+        'font-family:monospace',
+        `font-size:${isSelected ? '11px' : '10px'}`,
+        `color:${isHistorical ? '#5a6a7a' : isSelected ? '#ffffff' : color}`,
+        `font-weight:${isSelected ? '700' : '600'}`,
+        'background:rgba(8,11,15,0.7)',
+        'padding:1px 4px',
+        'border-radius:3px',
+        'white-space:nowrap',
+        `cursor:${clickable ? 'pointer' : 'default'}`,
+        `pointer-events:${clickable ? 'auto' : 'none'}`,
+    ].join(';');
+    el.textContent = name;
+    return el;
+}
+
+// ── Mode banner overlay (HTML positioned over map) ────────────────────────────
 interface ModeBannerProps {
-    viewMode:             MapState['viewMode'];
-    forecastSlot:         number;
-    historicalHour:       number;
-    onForecastSlotChange: (i: number) => void;
+    viewMode:               MapState['viewMode'];
+    forecastSlot:           number;
+    historicalHour:         number;
+    onForecastSlotChange:   (i: number) => void;
     onHistoricalHourChange: (i: number) => void;
 }
 
@@ -135,33 +254,32 @@ function ModeBanner({
     const labels       = isForecast ? FORECAST_LABELS : HISTORICAL_LABELS;
     const activeIndex  = isForecast ? forecastSlot : historicalHour;
     const onChange     = isForecast ? onForecastSlotChange : onHistoricalHourChange;
-
-    const snapshot = isHistorical ? MOCK_HISTORICAL[historicalHour] : null;
+    const snapshot     = isHistorical ? MOCK_HISTORICAL[historicalHour] : null;
 
     return (
         <div style={{
-            position:       'absolute',
-            bottom:         16,
-            left:           '50%',
-            transform:      'translateX(-50%)',
-            zIndex:         500,
-            display:        'flex',
-            flexDirection:  'column',
-            alignItems:     'center',
-            gap:            8,
-            pointerEvents:  'auto',
+            position:      'absolute',
+            bottom:        16,
+            left:          '50%',
+            transform:     'translateX(-50%)',
+            zIndex:        500,
+            display:       'flex',
+            flexDirection: 'column',
+            alignItems:    'center',
+            gap:           8,
+            pointerEvents: 'auto',
         }}>
-            {/* Mode label */}
+            {/* Mode pill */}
             <div style={{
-                padding:        '3px 12px',
-                background:     `${accentColor}20`,
-                border:         `1px solid ${accentColor}50`,
-                borderRadius:   20,
-                fontFamily:     'var(--font-mono)',
-                fontSize:       '0.55rem',
-                letterSpacing:  '0.14em',
-                textTransform:  'uppercase',
-                color:          accentColor,
+                padding:       '3px 12px',
+                background:    `${accentColor}20`,
+                border:        `1px solid ${accentColor}50`,
+                borderRadius:  20,
+                fontFamily:    'var(--font-mono)',
+                fontSize:      '0.55rem',
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+                color:         accentColor,
             }}>
                 {isForecast ? '▶ Forecast Mode' : '◀ Historical Mode'}
             </div>
@@ -201,7 +319,7 @@ function ModeBanner({
                 ))}
             </div>
 
-            {/* Historical stats panel */}
+            {/* Historical stats */}
             {isHistorical && snapshot && (
                 <div style={{
                     display:        'flex',
@@ -213,8 +331,8 @@ function ModeBanner({
                     backdropFilter: 'blur(12px)',
                 }}>
                     {[
-                        { label: 'Avg Speed',  value: `${snapshot.avgNetworkSpeed} kph` },
-                        { label: 'Incidents',  value: String(snapshot.incidentCount) },
+                        { label: 'Avg Speed', value: `${snapshot.avgNetworkSpeed} kph` },
+                        { label: 'Incidents', value: String(snapshot.incidentCount) },
                     ].map(stat => (
                         <div key={stat.label} style={{ textAlign: 'center' }}>
                             <div style={{ fontFamily:'var(--font-mono)', fontSize:'0.52rem', color:'var(--text-muted)', letterSpacing:'0.06em', marginBottom:2 }}>
@@ -242,6 +360,9 @@ interface OperatorOverlaysProps {
     selectedCorridorId?: string;
 }
 
+// Convenience alias for the verbose type name
+type AdvancedMarker = google.maps.marker.AdvancedMarkerElement;
+
 function OperatorOverlays({
                               alerts,
                               mapState,
@@ -251,16 +372,19 @@ function OperatorOverlays({
                               onCorridorClick,
                               selectedCorridorId,
                           }: OperatorOverlaysProps) {
-    const map     = useMap();
-    const mapsLib = useMapsLibrary('maps');
-    const vizLib  = useMapsLibrary('visualization');
+    const map       = useMap();
+    const mapsLib   = useMapsLibrary('maps');
+    // Requesting 'marker' ensures google.maps.marker.AdvancedMarkerElement is
+    // available before any of the effects below attempt to instantiate markers.
+    const markerLib = useMapsLibrary('marker');
+    const vizLib    = useMapsLibrary('visualization');
 
     const corridorLinesRef  = useRef<google.maps.Polyline[]>([]);
     const corridorGlowsRef  = useRef<google.maps.Polyline[]>([]);
-    const corridorLabelsRef = useRef<google.maps.Marker[]>([]);
-    const alertMarkersRef   = useRef<google.maps.Marker[]>([]);
-    const signalMarkersRef  = useRef<google.maps.Marker[]>([]);
-    const cameraMarkersRef  = useRef<google.maps.Marker[]>([]);
+    const corridorLabelsRef = useRef<AdvancedMarker[]>([]);
+    const alertMarkersRef   = useRef<AdvancedMarker[]>([]);
+    const signalMarkersRef  = useRef<AdvancedMarker[]>([]);
+    const cameraMarkersRef  = useRef<AdvancedMarker[]>([]);
     const heatmapRef        = useRef<google.maps.visualization.HeatmapLayer | null>(null);
     const infoWindowRef     = useRef<google.maps.InfoWindow | null>(null);
 
@@ -271,9 +395,8 @@ function OperatorOverlays({
     const showIncidents = mapState.activeOverlays.includes('incidents');
     const isHistorical  = viewMode === 'historical';
     const isForecast    = viewMode === 'forecast';
-    const isLive        = viewMode === 'live';
 
-    // ── Camera/pan sync ────────────────────
+    // ── Pan / zoom sync ────────────────────
     useEffect(() => {
         if (!map) return;
         map.panTo({ lat: mapState.center.lat, lng: mapState.center.lng });
@@ -284,21 +407,24 @@ function OperatorOverlays({
         map.setZoom(mapState.zoom);
     }, [map, mapState.zoom]);
 
-    // ── Corridor polylines ─────────────────
+    // ── Corridor polylines + labels ────────
     useEffect(() => {
-        if (!map || !mapsLib) return;
+        if (!map || !mapsLib || !markerLib) return;
 
-        corridorLinesRef.current.forEach(p => p.setMap(null));
-        corridorGlowsRef.current.forEach(p => p.setMap(null));
-        corridorLabelsRef.current.forEach(m => m.setMap(null));
-        corridorLinesRef.current  = [];
-        corridorGlowsRef.current  = [];
-        corridorLabelsRef.current = [];
+        // Extracted cleanup used both as setup teardown and as return value
+        const clearCorridors = () => {
+            corridorLinesRef.current.forEach(p  => p.setMap(null));
+            corridorGlowsRef.current.forEach(p  => p.setMap(null));
+            corridorLabelsRef.current.forEach(m => { m.map = null; });
+            corridorLinesRef.current  = [];
+            corridorGlowsRef.current  = [];
+            corridorLabelsRef.current = [];
+        };
+        clearCorridors();
 
         CORRIDOR_LINES.forEach(corridor => {
             const isSelected = corridor.id === selectedCorridorId;
 
-            // Determine color by mode
             let color: string;
             if (isForecast) {
                 color = getForecastColor(corridor.id, forecastSlot);
@@ -333,7 +459,7 @@ function OperatorOverlays({
                     repeat: '14px',
                 }] : undefined,
                 map,
-                zIndex: 2,
+                zIndex:    2,
                 clickable: !isHistorical,
             });
 
@@ -342,24 +468,20 @@ function OperatorOverlays({
                 glow.addListener('click', () => onCorridorClick(corridor.id));
             }
 
-            const mid   = corridor.path[Math.floor(corridor.path.length / 2)];
-            const label = new google.maps.Marker({
-                position: { lat: (mid as [number, number])[0] - 0.003, lng: (mid as [number, number])[1] },
+            const mid       = corridor.path[Math.floor(corridor.path.length / 2)];
+            const isClickable = !!onCorridorClick && !isHistorical;
+            const labelEl   = makeCorridorLabelEl({ name: corridor.name, color, isSelected, isHistorical, clickable: isClickable });
+
+            const label = new google.maps.marker.AdvancedMarkerElement({
+                position:     { lat: (mid as [number, number])[0] - 0.003, lng: (mid as [number, number])[1] },
                 map,
-                icon: { path: google.maps.SymbolPath.CIRCLE, scale: 0 },
-                label: {
-                    text:       corridor.name,
-                    color:      isHistorical ? '#5a6a7a' : isSelected ? '#ffffff' : color,
-                    fontSize:   isSelected ? '11px' : '10px',
-                    fontFamily: 'monospace',
-                    fontWeight: isSelected ? '700' : '600',
-                },
-                zIndex:    3,
-                clickable: !!onCorridorClick && !isHistorical,
+                content:      labelEl,
+                zIndex:       3,
+                gmpClickable: isClickable,
             });
 
-            if (onCorridorClick && !isHistorical) {
-                label.addListener('click', () => onCorridorClick(corridor.id));
+            if (isClickable) {
+                label.addListener('click', () => onCorridorClick!(corridor.id));
             }
 
             corridorGlowsRef.current.push(glow);
@@ -367,22 +489,20 @@ function OperatorOverlays({
             corridorLabelsRef.current.push(label);
         });
 
-        return () => {
-            corridorLinesRef.current.forEach(p => p.setMap(null));
-            corridorGlowsRef.current.forEach(p => p.setMap(null));
-            corridorLabelsRef.current.forEach(m => m.setMap(null));
-        };
-    }, [map, mapsLib, selectedCorridorId, onCorridorClick,
+        return clearCorridors;
+    }, [map, mapsLib, markerLib, selectedCorridorId, onCorridorClick,
         viewMode, forecastSlot, historicalHour, isForecast, isHistorical]);
 
     // ── Alert markers ──────────────────────
     useEffect(() => {
-        if (!map || !mapsLib) return;
+        if (!map || !mapsLib || !markerLib) return;
 
-        alertMarkersRef.current.forEach(m => m.setMap(null));
-        alertMarkersRef.current = [];
+        const clearAlerts = () => {
+            alertMarkersRef.current.forEach(m => { m.map = null; });
+            alertMarkersRef.current = [];
+        };
+        clearAlerts();
 
-        // Hide live alert markers in historical mode
         if (isHistorical) return;
 
         if (!infoWindowRef.current) {
@@ -395,125 +515,121 @@ function OperatorOverlays({
 
         visible.forEach(alert => {
             const color  = SEVERITY_COLOR[alert.severity] ?? '#3b9eff';
-            // Dim markers in forecast mode
             const alpha  = isForecast ? 0.45 : 0.95;
             const radius = alert.severity === 'critical' ? 11
-                : alert.severity === 'high'     ? 9
-                    : alert.severity === 'medium'   ? 7 : 5;
+                : alert.severity === 'high'              ? 9
+                    : alert.severity === 'medium'            ? 7 : 5;
 
-            const ring = new google.maps.Marker({
-                position:  { lat: alert.location.lat, lng: alert.location.lng },
-                map,
-                icon: {
-                    path:          google.maps.SymbolPath.CIRCLE,
-                    scale:         radius + 7,
-                    fillColor:     color,
-                    fillOpacity:   isForecast ? 0.06 : 0.12,
-                    strokeColor:   color,
-                    strokeOpacity: isForecast ? 0.2 : 0.35,
-                    strokeWeight:  1,
-                },
-                zIndex: 4, optimized: false, clickable: !isForecast,
-            });
+            const content = makeAlertEl({ color, radius, alpha, isForecast });
 
-            const dot = new google.maps.Marker({
-                position:  { lat: alert.location.lat, lng: alert.location.lng },
+            const marker = new google.maps.marker.AdvancedMarkerElement({
+                position:     { lat: alert.location.lat, lng: alert.location.lng },
                 map,
-                icon: {
-                    path:          google.maps.SymbolPath.CIRCLE,
-                    scale:         radius,
-                    fillColor:     color,
-                    fillOpacity:   alpha,
-                    strokeColor:   '#ffffff',
-                    strokeOpacity: isForecast ? 0.3 : 0.7,
-                    strokeWeight:  1.5,
-                },
-                title:     alert.title,
-                zIndex:    5, optimized: false, clickable: !isForecast,
+                content,
+                title:        alert.title,
+                zIndex:       5,
+                gmpClickable: !isForecast,
             });
 
             if (!isForecast) {
-                const showInfo = () => {
+                marker.addEventListener('gmp-click', () => {
                     infoWindowRef.current?.setContent(`
-            <div style="background:#0c1117;color:#e2e8f0;padding:10px 12px;border-radius:6px;
-              font-family:monospace;font-size:11px;border:1px solid ${color}40;max-width:220px;">
-              <div style="color:${color};font-weight:700;margin-bottom:4px;font-size:12px;">${alert.title}</div>
-              <div style="color:#718096;margin-bottom:6px;line-height:1.5;">${alert.description}</div>
-              <div style="display:flex;gap:8px;align-items:center;">
-                <span style="background:${color}20;color:${color};padding:1px 6px;border-radius:3px;
-                  font-size:10px;text-transform:uppercase;letter-spacing:0.06em;">${alert.severity}</span>
-                <span style="color:#4a5568">${alert.confidence}% confidence</span>
-              </div>
-              <div style="color:#4a5568;margin-top:4px;">📍 ${alert.location.label}</div>
-            </div>
-          `);
-                    infoWindowRef.current?.open(map, dot);
+                        <div style="background:#0c1117;color:#e2e8f0;padding:10px 12px;border-radius:6px;
+                             font-family:monospace;font-size:11px;border:1px solid ${color}40;max-width:220px;">
+                          <div style="color:${color};font-weight:700;margin-bottom:4px;font-size:12px;">${alert.title}</div>
+                          <div style="color:#718096;margin-bottom:6px;line-height:1.5;">${alert.description}</div>
+                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+  <span
+    style={{
+      background: \`${color}20\`,
+      color: color,
+      padding: '1px 6px',
+      borderRadius: '3px',
+      fontSize: '10px',
+      textTransform: 'uppercase',
+      letterSpacing: '0.06em'
+    }}
+  >
+    {alert.severity}
+  </span>
+  <span style={{ color: '#4a5568' }}>
+    {alert.confidence}% confidence
+  </span>
+</div>
+                          <div style="color:#4a5568;margin-top:4px;">📍 ${alert.location.label}</div>
+                        </div>
+                    `);
+                    // InfoWindow.open accepts an AdvancedMarkerElement as anchor
+                    infoWindowRef.current?.open({ anchor: marker, map });
                     onAlertClick(alert);
-                };
-                dot.addListener('click', showInfo);
-                ring.addListener('click', showInfo);
+                });
             }
 
-            alertMarkersRef.current.push(ring, dot);
+            alertMarkersRef.current.push(marker);
         });
 
-        return () => { alertMarkersRef.current.forEach(m => m.setMap(null)); };
-    }, [map, mapsLib, alerts, showIncidents, isForecast, isHistorical, onAlertClick]);
+        return clearAlerts;
+    }, [map, mapsLib, markerLib, alerts, showIncidents, isForecast, isHistorical, onAlertClick]);
+
+    // ── Shared helper: simple point-marker layer ───
+    // Extracted to avoid the duplicate signal/camera effect pattern.
+    // Creates AdvancedMarkerElements from a data array, clears on re-run.
+    function makeSimpleMarkerLayer<T extends { lat: number; lng: number }>(
+        items:   T[],
+        ref:     React.MutableRefObject<AdvancedMarker[]>,
+        build:   (item: T) => { content: HTMLElement; title: string; zIndex: number },
+    ) {
+        ref.current.forEach(m => { m.map = null; });
+        ref.current = [];
+        items.forEach(item => {
+            const { content, title, zIndex } = build(item);
+            const marker = new google.maps.marker.AdvancedMarkerElement({
+                position: { lat: item.lat, lng: item.lng },
+                map, content, title, zIndex,
+            });
+            ref.current.push(marker);
+        });
+        return () => { ref.current.forEach(m => { m.map = null; }); ref.current = []; };
+    }
 
     // ── Signal markers ─────────────────────
     useEffect(() => {
-        if (!map || !mapsLib) return;
-        signalMarkersRef.current.forEach(m => m.setMap(null));
-        signalMarkersRef.current = [];
-
-        if (!showSignals || isHistorical) return;
-
-        INTERSECTIONS.forEach(sig => {
-            const color  = SIGNAL_COLOR[sig.status] ?? '#6b7280';
-            const marker = new google.maps.Marker({
-                position: { lat: sig.lat, lng: sig.lng },
-                map,
-                icon: {
-                    path: google.maps.SymbolPath.CIRCLE, scale: 5,
-                    fillColor: color, fillOpacity: 0.9,
-                    strokeColor: '#ffffff', strokeOpacity: 0.5, strokeWeight: 1,
-                },
-                title: `Signal ${sig.id} — ${sig.status}`,
-                zIndex: 6, optimized: true,
-            });
-            signalMarkersRef.current.push(marker);
-        });
-
-        return () => { signalMarkersRef.current.forEach(m => m.setMap(null)); };
-    }, [map, mapsLib, showSignals, isHistorical]);
+        if (!map || !mapsLib || !markerLib || !showSignals || isHistorical) {
+            signalMarkersRef.current.forEach(m => { m.map = null; });
+            signalMarkersRef.current = [];
+            return;
+        }
+        return makeSimpleMarkerLayer(
+            INTERSECTIONS,
+            signalMarkersRef,
+            sig => ({
+                content: makeSignalEl(SIGNAL_COLOR[sig.status] ?? '#6b7280'),
+                title:   `Signal ${sig.id} — ${sig.status}`,
+                zIndex:  6,
+            }),
+        );
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [map, mapsLib, markerLib, showSignals, isHistorical]);
 
     // ── Camera markers ─────────────────────
     useEffect(() => {
-        if (!map || !mapsLib) return;
-        cameraMarkersRef.current.forEach(m => m.setMap(null));
-        cameraMarkersRef.current = [];
-
-        if (!showCameras || isHistorical) return;
-
-        CAMERAS.forEach(cam => {
-            const color  = cam.online ? '#3b9eff' : '#6b7280';
-            const marker = new google.maps.Marker({
-                position: { lat: cam.lat, lng: cam.lng },
-                map,
-                icon: {
-                    path: 'M -4,-3 L 4,-3 L 4,3 L -4,3 Z M 4,-1.5 L 7,0 L 4,1.5 Z',
-                    fillColor: color, fillOpacity: 0.85,
-                    strokeColor: '#ffffff', strokeOpacity: 0.4, strokeWeight: 0.8, scale: 1.2,
-                },
-                label: { text: cam.label, color, fontSize: '9px', fontFamily: 'monospace', fontWeight: '600' },
-                title: `${cam.label} — ${cam.online ? 'Online' : 'Offline'}`,
-                zIndex: 7, optimized: true,
-            });
-            cameraMarkersRef.current.push(marker);
-        });
-
-        return () => { cameraMarkersRef.current.forEach(m => m.setMap(null)); };
-    }, [map, mapsLib, showCameras, isHistorical]);
+        if (!map || !mapsLib || !markerLib || !showCameras || isHistorical) {
+            cameraMarkersRef.current.forEach(m => { m.map = null; });
+            cameraMarkersRef.current = [];
+            return;
+        }
+        return makeSimpleMarkerLayer(
+            CAMERAS,
+            cameraMarkersRef,
+            cam => ({
+                content: makeCameraEl(cam.online ? '#3b9eff' : '#6b7280', cam.label),
+                title:   `${cam.label} — ${cam.online ? 'Online' : 'Offline'}`,
+                zIndex:  7,
+            }),
+        );
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [map, mapsLib, markerLib, showCameras, isHistorical]);
 
     // ── Heatmap ────────────────────────────
     useEffect(() => {
@@ -526,17 +642,21 @@ function OperatorOverlays({
         const heatData = alerts.map(alert => ({
             location: new google.maps.LatLng(alert.location.lat, alert.location.lng),
             weight:   alert.severity === 'critical' ? 5
-                : alert.severity === 'high'     ? 3
-                    : alert.severity === 'medium'   ? 2 : 1,
+                : alert.severity === 'high'         ? 3
+                    : alert.severity === 'medium'       ? 2 : 1,
         }));
 
         heatmapRef.current = new google.maps.visualization.HeatmapLayer({
-            data: heatData, map,
-            radius: 45,
+            data:    heatData,
+            map,
+            radius:  45,
             opacity: isForecast ? 0.25 : 0.55,
             gradient: [
-                'rgba(0,0,0,0)', 'rgba(59,158,255,0.3)', 'rgba(245,197,24,0.5)',
-                'rgba(255,136,0,0.7)', 'rgba(255,59,59,0.9)',
+                'rgba(0,0,0,0)',
+                'rgba(59,158,255,0.3)',
+                'rgba(245,197,24,0.5)',
+                'rgba(255,136,0,0.7)',
+                'rgba(255,59,59,0.9)',
             ],
         });
 
@@ -560,6 +680,16 @@ interface GoogleOperatorMapProps {
     onHistoricalHourChange:(hour: number) => void;
     selectedCorridorId?:   string;
     apiKey:                string;
+    /**
+     * Pre-center the map on a specific coordinate (e.g. an incident location).
+     * Defaults to Nairobi CBD when omitted.
+     */
+    initialCenter?: { lat: number; lng: number };
+    /**
+     * Initial zoom override.
+     * Defaults to 15 when initialCenter is provided, 13 (city overview) otherwise.
+     */
+    initialZoom?:   number;
 }
 
 export function GoogleOperatorMap({
@@ -575,15 +705,26 @@ export function GoogleOperatorMap({
                                       onHistoricalHourChange,
                                       selectedCorridorId,
                                       apiKey,
+                                      initialCenter,
+                                      initialZoom,
                                   }: GoogleOperatorMapProps) {
+    // Incident view zooms to street level; city overview stays at 13.
+    const resolvedCenter = initialCenter ?? { lat: -1.2921, lng: 36.8219 };
+    const resolvedZoom   = initialZoom   ?? (initialCenter ? 15 : 13);
+
     return (
-        <APIProvider apiKey={apiKey} libraries={['visualization']}>
+        // Both 'visualization' (heatmap) and 'marker' (AdvancedMarkerElement)
+        // must be listed so their namespaces are available before overlays run.
+        <APIProvider apiKey={apiKey} libraries={['visualization', 'marker']}>
             <div style={{ position: 'relative', width: '100%', height: '100%' }}>
                 <Map
                     style={{ width: '100%', height: '100%' }}
-                    defaultCenter={{ lat: -1.2921, lng: 36.8219 }}
-                    defaultZoom={13}
-                    //mapId="operator-map"
+                    defaultCenter={resolvedCenter}
+                    defaultZoom={resolvedZoom}
+                    // mapId — enable when using cloud-based map styling.
+                    // Add NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID to .env.local and
+                    // uncomment the line below to activate.
+                    mapId={process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID}
                     styles={DARK_MAP_STYLE}
                     disableDefaultUI
                     gestureHandling="greedy"
@@ -603,7 +744,7 @@ export function GoogleOperatorMap({
                     />
                 </Map>
 
-                {/* Mode UI sits outside <Map> so it's not captured by Google */}
+                {/* ModeBanner is outside <Map> so Google's event system does not capture it */}
                 <ModeBanner
                     viewMode={mapState.viewMode}
                     forecastSlot={forecastSlot}

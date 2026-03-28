@@ -2,7 +2,13 @@ import type { Request, Response, NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
 import { auditLog } from '../data/store.js';
 import { v4 as uuid } from 'uuid';
-import type { AuditEntry, AuditActionType } from '../types/index.js';
+import type { AuditEntry, AuditActionType } from '../types/backend-index.js';
+
+// Lazy import to avoid circular dependency (middleware ← routes ← wsManager)
+// wsManager is initialised in backend-index.ts before any routes are called, so this
+// require() is always resolved by the time addAudit() is first invoked.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const getWsManager = () => require('../websocket/manager').wsManager as import('../websocket/manager.js').WebSocketManager;
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
 
@@ -74,6 +80,12 @@ export function addAudit(
     auditLog.unshift(record); // newest first
     // Keep only last 1000 entries in memory
     if (auditLog.length > 1000) auditLog.splice(1000);
+    // Broadcast to all connected operators so activity feeds stay live
+    try {
+        getWsManager().emit('action:performed', record);
+    } catch {
+        // wsManager not yet initialised (server startup) — safe to skip
+    }
     return record;
 }
 

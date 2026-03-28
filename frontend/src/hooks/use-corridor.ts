@@ -28,33 +28,96 @@ function seedTiming(corridors: Corridor[]): Corridor[] {
     }));
 }
 
-async function patchCorridor(
-    corridorId: string,
-    action: string,
-    payload: unknown,
-): Promise<void> {
+// ── API helpers ───────────────────────────────────────────────────────────────
+// Backend endpoints:
+//   Timing update → PATCH /api/corridors/:id/timing
+//   Lock          → POST  /api/corridors/:id/lock
+//   Unlock        → POST  /api/corridors/:id/unlock
+//
+// The operator identity is read from window.__atmsOperator and forwarded
+// as the X-Operator-Id header — the backend logs it in the audit trail.
+
+function getOperatorHeader(): Record<string, string> {
+    if (typeof window === 'undefined') return {};
+    const op = (window as Window & { __atmsOperator?: string }).__atmsOperator;
+    return op ? { 'X-Operator-Id': op } : {};
+}
+
+// ── SignalTiming bridge ───────────────────────────────────────────────────────
+// Frontend type:  { greenSeconds, yellowSeconds, redSeconds, adaptive }
+// Backend type:   { greenDuration, redDuration, yellowDuration, cycleLength }
+//
+// We convert before sending and after receiving so neither side changes.
+
+interface BackendTiming {
+    greenDuration:  number;
+    redDuration:    number;
+    yellowDuration: number;
+    cycleLength:    number;
+}
+
+function toBackendTiming(t: SignalTiming): BackendTiming {
+    return {
+        greenDuration:  t.greenSeconds,
+        redDuration:    t.redSeconds,
+        yellowDuration: t.yellowSeconds,
+        cycleLength:    t.greenSeconds + t.yellowSeconds + t.redSeconds,
+    };
+}
+
+function fromBackendTiming(t: BackendTiming): SignalTiming {
+    return {
+        greenSeconds:  t.greenDuration,
+        yellowSeconds: t.yellowDuration,
+        redSeconds:    t.redDuration,
+        adaptive:      false, // backend does not track this field yet
+    };
+}
+
+async function corridorPatch(path: string, body?: object): Promise<void> {
     try {
-        await fetch('/api/corridors', {
+        await fetch(path, {
             method:  'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ corridorId, action, payload }),
+            headers: { 'Content-Type': 'application/json', ...getOperatorHeader() },
+            body:    body ? JSON.stringify(body) : undefined,
         });
     } catch {
-        // Apply locally regardless — optimistic
+        // Optimistic update already applied — swallow network errors silently
     }
 }
 
-export function useCorridor(): CorridorState {
-    const [corridors, setCorridors]   = useState<Corridor[]>(seedTiming(MOCK_CORRIDORS));
-    const [selectedId, setSelectedId] = useState<string | null>(null);
-    const [isLoading, setIsLoading]   = useState(false);
+async function corridorPost(path: string, body?: object): Promise<void> {
+    try {
+        await fetch(path, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json', ...getOperatorHeader() },
+            body:    body ? JSON.stringify(body) : undefined,
+        });
+    } catch {
+        // Optimistic update already applied
+    }
+}
 
-    // ── Fetch on mount ──────────────────────
+// ── Hook ──────────────────────────────────────────────────────────────────────
+
+export function useCorridor(): CorridorState {
+    const [corridors,  setCorridors]  = useState<Corridor[]>(seedTiming(MOCK_CORRIDORS));
+    const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [isLoading,  setIsLoading]  = useState(false);
+
+    // ── Fetch on mount ────────────────────────────────────────────────────────
+    // Backend returns { ok: true, data: Corridor[] } — unwrap accordingly.
+    // Falls back to MOCK_CORRIDORS if unreachable.
     useEffect(() => {
         setIsLoading(true);
         fetch('/api/corridors')
             .then(r => r.json())
-            .then((data: Corridor[]) => {
+            .then((json: unknown) => {
+                // Support both { ok, data: Corridor[] } and raw Corridor[]
+                const data = Array.isArray(json)
+                    ? json
+                    : (json as { ok?: boolean; data?: Corridor[] }).data;
+
                 if (Array.isArray(data) && data.length > 0) {
                     setCorridors(seedTiming(data.map(reviveCorridor)));
                 }
@@ -63,49 +126,53 @@ export function useCorridor(): CorridorState {
             .finally(() => setIsLoading(false));
     }, []);
 
-    // ── Stable setter ref — avoids setState-in-effect lint error ──
+    // ── Stable setter ref ─────────────────────────────────────────────────────
     const setCorridorsRef = useRef(setCorridors);
     setCorridorsRef.current = setCorridors;
 
-    // ── WebSocket live corridor updates ─────
+    // ── WebSocket live corridor updates ───────────────────────────────────────
     useWsEvent<{ id: string; flowRate?: number; avgSpeedKph?: number; status?: CorridorStatus }>(
         'corridor:updated',
         useCallback((event) => {
-            const update = event.payload;
-            // startTransition defers the setState so it doesn't run synchronously
-            // inside the effect, satisfying react-hooks/set-state-in-effect
             startTransition(() => {
                 setCorridorsRef.current(prev => prev.map((c: Corridor) =>
-                    c.id === update.id ? { ...c, ...update } : c
+                    c.id === event.payload.id ? { ...c, ...event.payload } : c,
                 ));
             });
-        }, [])
+        }, []),
     );
 
-    // ── Selection ────────────────────────────
+    // ── Selection ─────────────────────────────────────────────────────────────
     const selectCorridor = useCallback((id: string) => setSelectedId(id), []);
     const clearCorridor  = useCallback(() => setSelectedId(null), []);
 
-    // ── Actions ──────────────────────────────
+    // ── Actions ───────────────────────────────────────────────────────────────
+
     const updateTiming = useCallback((corridorId: string, timing: SignalTiming) => {
-        void patchCorridor(corridorId, 'update_timing', timing);
+        // Optimistic local update first — UI feels instant
         setCorridors(prev => prev.map((c: Corridor) =>
-            c.id === corridorId ? { ...c, signalTiming: timing } : c
+            c.id === corridorId ? { ...c, signalTiming: timing } : c,
         ));
+        // Send to backend with field names it expects
+        void corridorPatch(
+            `/api/corridors/${corridorId}/timing`,
+            toBackendTiming(timing),
+        );
     }, []);
 
     const lockCorridor = useCallback((corridorId: string, by: string) => {
-        void patchCorridor(corridorId, 'lock', { by });
         setCorridors(prev => prev.map((c: Corridor) =>
-            c.id === corridorId ? { ...c, lockedBy: by, lockedAt: new Date() } : c
+            c.id === corridorId ? { ...c, lockedBy: by, lockedAt: new Date() } : c,
         ));
+        void corridorPost(`/api/corridors/${corridorId}/lock`);
+        // 'by' is forwarded via X-Operator-Id header — backend reads it from there
     }, []);
 
     const unlockCorridor = useCallback((corridorId: string) => {
-        void patchCorridor(corridorId, 'unlock', {});
         setCorridors(prev => prev.map((c: Corridor) =>
-            c.id === corridorId ? { ...c, lockedBy: undefined, lockedAt: undefined } : c
+            c.id === corridorId ? { ...c, lockedBy: undefined, lockedAt: undefined } : c,
         ));
+        void corridorPost(`/api/corridors/${corridorId}/unlock`);
     }, []);
 
     const selectedCorridor = corridors.find((c: Corridor) => c.id === selectedId) ?? null;

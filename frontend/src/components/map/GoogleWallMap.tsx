@@ -264,7 +264,7 @@ export function GoogleWallMap({ alerts, apiKey }: GoogleWallMapProps) {
                 style={{ width: '100%', height: '100%' }}
                 defaultCenter={{ lat: -1.2921, lng: 36.8219 }}
                 defaultZoom={12}
-                //mapId="wall-map"
+                mapId={process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID}
                 styles={DARK_MAP_STYLE}
                 disableDefaultUI
                 gestureHandling="none"
